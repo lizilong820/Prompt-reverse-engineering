@@ -1,4 +1,5 @@
 const { api } = require("./utils/api");
+const { DEVELOPMENT } = require("./config");
 
 App({
   globalData: { user: null, pricing: { image: 1, video: 3 }, ad: null },
@@ -7,8 +8,10 @@ App({
   },
   async ensureLogin() {
     if (wx.getStorageSync("token")) return this.refreshMe();
-    const login = await new Promise((resolve, reject) => wx.login({ success: resolve, fail: reject }));
-    const payload = await api("/api/v1/auth/wechat", { method: "POST", data: { code: login.code }, auth: false });
+    const code = DEVELOPMENT
+      ? "dev:wechat-dev-user"
+      : (await new Promise((resolve, reject) => wx.login({ success: resolve, fail: reject }))).code;
+    const payload = await api("/api/v1/auth/wechat", { method: "POST", data: { code }, auth: false });
     wx.setStorageSync("token", payload.token);
     this.globalData.user = payload.user;
     this.globalData.pricing = payload.pricing;
