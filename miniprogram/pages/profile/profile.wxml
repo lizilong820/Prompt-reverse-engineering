@@ -1,5 +1,6 @@
 <view class="page">
-  <view class="balance"><text>当前积分</text><strong>{{credits}}</strong><small>图片 {{pricing.image}} 积分 / 次 · 视频 {{pricing.video}} 积分 / 次</small></view>
+  <view class="profile-head"><view class="avatar">PL</view><view><text class="eyebrow">MY ACCOUNT</text><view class="section-title">我的积分</view></view></view>
+  <view class="balance"><text>当前积分</text><strong>{{credits}}</strong><small>图片 {{pricing.image}} 分 / 次 · 视频 {{pricing.video}} 分 / 次</small></view>
   <view class="ledger-title"><text class="eyebrow">CREDIT LEDGER</text><view class="section-title">积分明细</view></view>
   <view wx:if="{{ledger.length}}" class="ledger"><view class="entry" wx:for="{{ledger}}" wx:key="id"><view><strong>{{item.reasonText}}</strong><small>{{item.createdText}}</small></view><view class="amount {{item.amount > 0 ? 'plus' : 'minus'}}">{{item.amount > 0 ? '+' : ''}}{{item.amount}}<small>余额 {{item.balance_after}}</small></view></view></view>
   <view wx:else class="empty">暂无积分记录</view>

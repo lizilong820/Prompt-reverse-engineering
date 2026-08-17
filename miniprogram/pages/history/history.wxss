@@ -1,7 +1,8 @@
-.jobs { display: grid; gap: 16rpx; margin-top: 30rpx; }
-.job { padding: 24rpx; border: 1rpx solid #dedbd3; border-radius: 12rpx; background: #fbfaf7; }
+.page-header { display: flex; justify-content: space-between; align-items: flex-end; }.count { color: #a94430; font-size: 22rpx; font-weight: 700; }
+.jobs { display: grid; gap: 16rpx; margin-top: 34rpx; }
+.job { padding: 26rpx; border: 1rpx solid #dedbd3; border-radius: 16rpx; background: #fffdf9; box-shadow: 0 8rpx 18rpx rgba(47,43,36,.04); }
 .job-top, .job-meta { display: flex; justify-content: space-between; align-items: center; }
-.mode { color: #b34630; font-size: 21rpx; font-weight: 700; }
+.mode { padding: 6rpx 10rpx; border-radius: 6rpx; color: #a94430; background: #f7e5de; font-size: 20rpx; font-weight: 750; }
 .status { font-size: 21rpx; }.status.succeeded { color: #44705e; }.status.failed { color: #b34630; }.status.processing { color: #8a6e2e; }
 .filename { margin: 18rpx 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 28rpx; font-weight: 650; }
 .job-meta { color: #77756e; font-size: 21rpx; }

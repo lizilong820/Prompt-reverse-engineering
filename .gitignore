@@ -5,4 +5,5 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 prompt-studio-app/
+miniprogram/project.private.config.json
 *.log
