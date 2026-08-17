@@ -1,0 +1,24 @@
+<view class="page">
+  <view class="account-bar">
+    <view><text class="account-label">可用积分</text><text class="credit-number">{{credits}}</text></view>
+    <button class="reward-button" bindtap="watchRewardAd" disabled="{{adLoading}}">看广告 +{{adReward}}</button>
+  </view>
+
+  <view class="heading"><text class="eyebrow">PROMPT RECONSTRUCTION</text><view class="section-title">反推生成提示词</view><text class="intro">上传参考素材，提取主体、场景、镜头、光线、风格和视频分镜。</text></view>
+
+  <view class="mode-switch">
+    <view class="mode-item {{mode === 'image' ? 'active' : ''}}" data-mode="image" bindtap="switchMode">图片 · {{pricing.image}} 积分</view>
+    <view class="mode-item {{mode === 'video' ? 'active' : ''}}" data-mode="video" bindtap="switchMode">视频 · {{pricing.video}} 积分</view>
+  </view>
+
+  <view class="media-box" bindtap="chooseMedia">
+    <image wx:if="{{mode === 'image' && filePath}}" class="preview" src="{{filePath}}" mode="aspectFill" />
+    <video wx:if="{{mode === 'video' && filePath}}" class="preview" src="{{filePath}}" controls />
+    <view wx:else class="upload-empty"><text class="upload-icon">↑</text><text class="upload-title">选择{{mode === 'image' ? '图片' : '视频'}}</text><text class="upload-hint">{{mode === 'image' ? 'JPG / PNG / WEBP，最大 12MB' : 'MP4 / MOV / WEBM，最大 180MB、90秒'}}</text></view>
+  </view>
+  <view wx:if="{{fileName}}" class="file-meta"><text>{{fileName}}</text><text>{{fileSize}}</text></view>
+
+  <button class="primary submit" bindtap="submit" disabled="{{!filePath || submitting}}">{{submitting ? '正在分析 ' + progress + '%' : '消耗 ' + currentCost + ' 积分并分析'}}</button>
+  <button wx:if="{{credits < currentCost}}" class="secondary ad-action" bindtap="watchRewardAd">积分不足，看完整广告获得 {{adReward}} 积分</button>
+  <view class="notice">分析失败会自动退回积分。重复点击不会重复扣费。</view>
+</view>

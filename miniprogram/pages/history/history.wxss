@@ -1,0 +1,7 @@
+.jobs { display: grid; gap: 16rpx; margin-top: 30rpx; }
+.job { padding: 24rpx; border: 1rpx solid #dedbd3; border-radius: 12rpx; background: #fbfaf7; }
+.job-top, .job-meta { display: flex; justify-content: space-between; align-items: center; }
+.mode { color: #b34630; font-size: 21rpx; font-weight: 700; }
+.status { font-size: 21rpx; }.status.succeeded { color: #44705e; }.status.failed { color: #b34630; }.status.processing { color: #8a6e2e; }
+.filename { margin: 18rpx 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 28rpx; font-weight: 650; }
+.job-meta { color: #77756e; font-size: 21rpx; }

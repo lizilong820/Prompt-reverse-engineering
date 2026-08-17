@@ -30,6 +30,7 @@ MAX_VIDEO_SECONDS = int(os.getenv("MAX_VIDEO_SECONDS", "90"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini").strip()
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+ENABLE_LEGACY_WEB_API = os.getenv("ENABLE_LEGACY_WEB_API", "false").lower() == "true"
 IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 VIDEO_TYPES = {"video/mp4", "video/webm", "video/quicktime", "video/x-matroska"}
 
@@ -210,6 +211,8 @@ async def index() -> Path:
 
 @app.get("/api/history", response_model=list[HistoryItem])
 async def history() -> list[HistoryItem]:
+    if not ENABLE_LEGACY_WEB_API:
+        raise HTTPException(status_code=410, detail="Web 分析接口已停用，请使用微信小程序")
     with get_db() as db:
         rows = db.execute("SELECT id, created_at, mode, filename, subject, confidence FROM analyses ORDER BY id DESC LIMIT 50").fetchall()
     return [HistoryItem.model_validate(dict(row)) for row in rows]
@@ -217,6 +220,8 @@ async def history() -> list[HistoryItem]:
 
 @app.get("/api/history/{analysis_id}", response_model=AnalysisResponse)
 async def history_detail(analysis_id: int) -> AnalysisResponse:
+    if not ENABLE_LEGACY_WEB_API:
+        raise HTTPException(status_code=410, detail="Web 分析接口已停用，请使用微信小程序")
     with get_db() as db:
         row = db.execute("SELECT * FROM analyses WHERE id = ?", (analysis_id,)).fetchone()
     if row is None:
@@ -225,8 +230,7 @@ async def history_detail(analysis_id: int) -> AnalysisResponse:
     return AnalysisResponse(id=row["id"], created_at=row["created_at"], mode=row["mode"], source="history", filename=row["filename"], analysis=payload["analysis"], prompts=payload["prompts"], note="已从服务器历史记录恢复")
 
 
-@app.post("/api/analyze", response_model=AnalysisResponse)
-async def analyze(file: UploadFile = File(...), mode: str = Form("image"), model: str = Form("universal")) -> AnalysisResponse:
+async def analyze_media_upload(file: UploadFile, mode: str) -> tuple[VisualAnalysis, PromptBundle]:
     if mode not in {"image", "video"}:
         raise HTTPException(status_code=400, detail="不支持的媒体类型")
     allowed_types = IMAGE_TYPES if mode == "image" else VIDEO_TYPES
@@ -255,7 +259,21 @@ async def analyze(file: UploadFile = File(...), mode: str = Form("image"), model
             duration = get_video_duration(temp.name)
             analysis = await call_vision(video_frames(temp.name, duration))
     prompts = make_prompts(analysis)
+    return analysis, prompts
+
+
+@app.post("/api/analyze", response_model=AnalysisResponse)
+async def analyze(file: UploadFile = File(...), mode: str = Form("image"), model: str = Form("universal")) -> AnalysisResponse:
+    if not ENABLE_LEGACY_WEB_API:
+        raise HTTPException(status_code=410, detail="Web 分析接口已停用，请使用微信小程序")
+    analysis, prompts = await analyze_media_upload(file, mode)
     analysis_id = save_analysis(mode, file.filename or "untitled", analysis, prompts)
     with get_db() as db:
         row = db.execute("SELECT created_at FROM analyses WHERE id = ?", (analysis_id,)).fetchone()
     return AnalysisResponse(id=analysis_id, created_at=row["created_at"], mode=mode, source="live", filename=file.filename or "untitled", analysis=analysis, prompts=prompts, note="已完成真实媒体分析，结果已保存到服务器历史记录。")
+
+
+from app.commercial import commercial_router, recover_interrupted_jobs  # noqa: E402
+
+app.include_router(commercial_router)
+recover_interrupted_jobs()

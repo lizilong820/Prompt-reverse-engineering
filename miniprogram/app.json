@@ -1,0 +1,27 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/history/history",
+    "pages/result/result",
+    "pages/profile/profile"
+  ],
+  "window": {
+    "navigationBarTitleText": "Prompt Lens",
+    "navigationBarBackgroundColor": "#f7f6f2",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f2f0eb"
+  },
+  "tabBar": {
+    "color": "#77756e",
+    "selectedColor": "#c64f35",
+    "backgroundColor": "#fbfaf7",
+    "borderStyle": "black",
+    "list": [
+      { "pagePath": "pages/index/index", "text": "分析" },
+      { "pagePath": "pages/history/history", "text": "记录" },
+      { "pagePath": "pages/profile/profile", "text": "我的" }
+    ]
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}
