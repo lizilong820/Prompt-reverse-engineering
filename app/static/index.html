@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f5f3ef" />
+    <meta name="description" content="Prompt Lens 图片与视频生成提示词反推工具" />
+    <title>Prompt Lens · 视觉提示词反推</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true">PL</div>
+          <div>
+            <div class="brand-name">Prompt Lens</div>
+            <div class="brand-subtitle">视觉提示词反推工作台</div>
+          </div>
+        </div>
+        <nav class="topnav" aria-label="主导航">
+          <button class="nav-item active" type="button"><span>⌁</span>工作台</button>
+          <button class="nav-item" id="historyButton" type="button"><span>◷</span>历史记录 <b id="historyCount">0</b></button>
+        </nav>
+        <div class="topbar-status"><span class="status-dot"></span><span id="serviceStatus">Demo 模式</span></div>
+      </header>
+
+      <main class="workspace">
+        <section class="panel source-panel" aria-labelledby="sourceTitle">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">01 / SOURCE</p>
+              <h1 id="sourceTitle">输入素材</h1>
+            </div>
+            <button class="icon-button" id="demoButton" type="button" title="载入示例分析" aria-label="载入示例分析">✦</button>
+          </div>
+
+          <div class="mode-switch" role="tablist" aria-label="素材类型">
+            <button class="mode-button active" data-mode="image" type="button" role="tab" aria-selected="true">▧ 图片</button>
+            <button class="mode-button" data-mode="video" type="button" role="tab" aria-selected="false">▹ 视频 <small>Beta</small></button>
+          </div>
+
+          <label class="dropzone" id="dropzone" for="fileInput">
+            <input id="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden />
+            <span class="dropzone-icon">↑</span>
+            <strong id="dropzoneTitle">拖入图片，或点击选择</strong>
+            <span id="dropzoneHint">JPG / PNG / WEBP，最大 12MB</span>
+          </label>
+
+          <div class="preview-frame" id="previewFrame">
+            <div class="preview-empty" id="previewEmpty">
+              <div class="preview-sky"></div>
+              <div class="preview-window"></div>
+              <div class="preview-subject"></div>
+              <div class="preview-caption" id="previewCaption">你的参考画面会显示在这里</div>
+            </div>
+            <img id="previewImage" alt="上传素材预览" hidden />
+            <video id="previewVideo" controls muted hidden></video>
+            <button class="clear-preview" id="clearButton" type="button" title="移除素材" aria-label="移除素材">×</button>
+          </div>
+          <div class="file-meta" id="fileMeta" hidden></div>
+
+          <div class="control-grid">
+            <label class="field-label">目标格式
+              <select id="modelSelect">
+                <option value="universal">通用提示词</option>
+                <option value="midjourney">Midjourney</option>
+                <option value="flux">FLUX / SDXL</option>
+                <option value="video">视频生成模型</option>
+              </select>
+            </label>
+            <label class="field-label">输出语言
+              <select id="languageSelect">
+                <option value="zh">中文 + English</option>
+                <option value="en">English</option>
+              </select>
+            </label>
+          </div>
+          <button class="primary-button" id="analyzeButton" type="button"><span>✦</span>开始反推提示词</button>
+          <p class="privacy-note"><span>⌁</span>素材只在分析请求期间处理，不会写入服务器磁盘。</p>
+        </section>
+
+        <section class="panel analysis-panel" aria-labelledby="analysisTitle">
+          <div class="panel-heading panel-heading-inline">
+            <div>
+              <p class="eyebrow">02 / BREAKDOWN</p>
+              <h2 id="analysisTitle">视觉拆解</h2>
+            </div>
+            <div class="confidence-pill"><span id="confidenceValue">86</span><small>% 置信度</small></div>
+          </div>
+          <p class="panel-description">把画面拆成可编辑的视觉事实，生成结果会随内容同步更新。</p>
+
+          <div class="analysis-fields">
+            <label class="analysis-field field-subject"><span>主体 SUBJECT</span><textarea id="subjectField" rows="3"></textarea></label>
+            <label class="analysis-field"><span>场景 SCENE</span><textarea id="sceneField" rows="3"></textarea></label>
+            <label class="analysis-field"><span>构图 COMPOSITION</span><textarea id="compositionField" rows="3"></textarea></label>
+            <label class="analysis-field"><span>镜头 CAMERA</span><textarea id="cameraField" rows="3"></textarea></label>
+            <label class="analysis-field"><span>光线 LIGHTING</span><textarea id="lightingField" rows="3"></textarea></label>
+            <label class="analysis-field"><span>色彩 COLOR</span><textarea id="colorField" rows="3"></textarea></label>
+            <label class="analysis-field field-wide"><span>风格 STYLE</span><textarea id="styleField" rows="3"></textarea></label>
+          </div>
+
+          <div class="tag-section">
+            <div class="section-label"><span>关键细节</span><button class="text-button" id="addDetailButton" type="button">＋ 添加</button></div>
+            <div class="tag-list" id="detailList"></div>
+          </div>
+          <div class="tag-section negative-section">
+            <div class="section-label"><span>Negative Prompt</span><button class="text-button" id="addNegativeButton" type="button">＋ 添加</button></div>
+            <div class="tag-list" id="negativeList"></div>
+          </div>
+        </section>
+
+        <section class="panel prompt-panel" aria-labelledby="promptTitle">
+          <div class="panel-heading panel-heading-inline">
+            <div>
+              <p class="eyebrow">03 / OUTPUT</p>
+              <h2 id="promptTitle">提示词输出</h2>
+            </div>
+            <button class="icon-button" id="copyButton" type="button" title="复制当前提示词" aria-label="复制当前提示词">⧉</button>
+          </div>
+          <div class="prompt-tabs" role="tablist" aria-label="提示词格式">
+            <button class="prompt-tab active" data-prompt="universal" type="button">通用</button>
+            <button class="prompt-tab" data-prompt="midjourney" type="button">MJ</button>
+            <button class="prompt-tab" data-prompt="flux" type="button">FLUX</button>
+            <button class="prompt-tab" data-prompt="video" type="button">视频</button>
+          </div>
+          <div class="prompt-box-wrap">
+            <textarea class="prompt-box" id="promptBox" spellcheck="false" aria-label="当前提示词"></textarea>
+            <div class="prompt-box-footer"><span id="promptWordCount">0 words</span><span>可直接编辑</span></div>
+          </div>
+          <div class="output-actions">
+            <button class="secondary-button" id="saveButton" type="button"><span>＋</span>保存版本</button>
+            <button class="secondary-button" id="exportButton" type="button"><span>↓</span>导出 JSON</button>
+          </div>
+          <div class="insight-box"><span class="insight-icon">i</span><div><strong id="analysisNote">已按视觉事实重建</strong><p>提示词不是原始记录，而是对画面的可复用描述。调整左侧字段即可快速迭代。</p></div></div>
+        </section>
+      </main>
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </div>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

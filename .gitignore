@@ -1,0 +1,8 @@
+.env
+.venv/
+.tools/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+prompt-studio-app/
+*.log
