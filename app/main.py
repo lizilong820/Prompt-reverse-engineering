@@ -233,17 +233,24 @@ async def analyze(file: UploadFile = File(...), mode: str = Form("image"), model
     max_bytes = MAX_IMAGE_BYTES if mode == "image" else MAX_VIDEO_BYTES
     if file.content_type not in allowed_types:
         raise HTTPException(status_code=415, detail="文件类型与当前模式不匹配")
-    content = await file.read(max_bytes + 1)
-    if len(content) > max_bytes:
-        raise HTTPException(status_code=413, detail=f"文件不能超过 {max_bytes // (1024 * 1024)}MB")
-    if not content:
-        raise HTTPException(status_code=400, detail="上传文件为空")
     if mode == "image":
+        content = await file.read(max_bytes + 1)
+        if len(content) > max_bytes:
+            raise HTTPException(status_code=413, detail=f"文件不能超过 {max_bytes // (1024 * 1024)}MB")
+        if not content:
+            raise HTTPException(status_code=400, detail="上传文件为空")
         analysis = await call_vision([(content, file.content_type, file.filename or "image")])
     else:
         suffix = Path(file.filename or "video.mp4").suffix or ".mp4"
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as temp:
-            temp.write(content)
+            total = 0
+            while chunk := await file.read(1024 * 1024):
+                total += len(chunk)
+                if total > max_bytes:
+                    raise HTTPException(status_code=413, detail=f"文件不能超过 {max_bytes // (1024 * 1024)}MB")
+                temp.write(chunk)
+            if total == 0:
+                raise HTTPException(status_code=400, detail="上传文件为空")
             temp.flush()
             duration = get_video_duration(temp.name)
             analysis = await call_vision(video_frames(temp.name, duration))
