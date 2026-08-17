@@ -32,12 +32,12 @@
               <p class="eyebrow">01 / SOURCE</p>
               <h1 id="sourceTitle">输入素材</h1>
             </div>
-            <button class="icon-button" id="demoButton" type="button" title="载入示例分析" aria-label="载入示例分析">✦</button>
+            <span class="live-badge" id="apiBadge">需要 API Key</span>
           </div>
 
           <div class="mode-switch" role="tablist" aria-label="素材类型">
             <button class="mode-button active" data-mode="image" type="button" role="tab" aria-selected="true">▧ 图片</button>
-            <button class="mode-button" data-mode="video" type="button" role="tab" aria-selected="false">▹ 视频 <small>Beta</small></button>
+            <button class="mode-button" data-mode="video" type="button" role="tab" aria-selected="false">▹ 视频</button>
           </div>
 
           <label class="dropzone" id="dropzone" for="fileInput">
@@ -52,7 +52,7 @@
               <div class="preview-sky"></div>
               <div class="preview-window"></div>
               <div class="preview-subject"></div>
-              <div class="preview-caption" id="previewCaption">你的参考画面会显示在这里</div>
+              <div class="preview-caption" id="previewCaption">上传真实素材开始分析</div>
             </div>
             <img id="previewImage" alt="上传素材预览" hidden />
             <video id="previewVideo" controls muted hidden></video>
@@ -77,7 +77,7 @@
             </label>
           </div>
           <button class="primary-button" id="analyzeButton" type="button"><span>✦</span>开始反推提示词</button>
-          <p class="privacy-note"><span>⌁</span>素材只在分析请求期间处理，不会写入服务器磁盘。</p>
+          <p class="privacy-note"><span>⌁</span>媒体仅用于本次分析，临时处理文件会在请求结束后删除。</p>
         </section>
 
         <section class="panel analysis-panel" aria-labelledby="analysisTitle">
@@ -86,7 +86,7 @@
               <p class="eyebrow">02 / BREAKDOWN</p>
               <h2 id="analysisTitle">视觉拆解</h2>
             </div>
-            <div class="confidence-pill"><span id="confidenceValue">86</span><small>% 置信度</small></div>
+            <div class="confidence-pill"><span id="confidenceValue">0</span><small>% 置信度</small></div>
           </div>
           <p class="panel-description">把画面拆成可编辑的视觉事实，生成结果会随内容同步更新。</p>
 
@@ -108,6 +108,10 @@
             <div class="section-label"><span>Negative Prompt</span><button class="text-button" id="addNegativeButton" type="button">＋ 添加</button></div>
             <div class="tag-list" id="negativeList"></div>
           </div>
+          <div class="timeline-section" id="timelineSection" hidden>
+            <div class="section-label"><span>视频分镜 TIMELINE</span><small id="timelineCount"></small></div>
+            <div class="timeline-list" id="timelineList"></div>
+          </div>
         </section>
 
         <section class="panel prompt-panel" aria-labelledby="promptTitle">
@@ -126,15 +130,19 @@
           </div>
           <div class="prompt-box-wrap">
             <textarea class="prompt-box" id="promptBox" spellcheck="false" aria-label="当前提示词"></textarea>
-            <div class="prompt-box-footer"><span id="promptWordCount">0 words</span><span>可直接编辑</span></div>
+            <div class="prompt-box-footer"><span id="promptWordCount">0 tokens</span><span>可直接编辑</span></div>
           </div>
           <div class="output-actions">
             <button class="secondary-button" id="saveButton" type="button"><span>＋</span>保存版本</button>
             <button class="secondary-button" id="exportButton" type="button"><span>↓</span>导出 JSON</button>
           </div>
-          <div class="insight-box"><span class="insight-icon">i</span><div><strong id="analysisNote">已按视觉事实重建</strong><p>提示词不是原始记录，而是对画面的可复用描述。调整左侧字段即可快速迭代。</p></div></div>
+          <div class="insight-box"><span class="insight-icon">i</span><div><strong id="analysisNote">等待真实分析</strong><p>提示词由视觉模型生成，不等同于原始提示词；你可以继续编辑并保存版本。</p></div></div>
         </section>
       </main>
+      <aside class="history-drawer" id="historyDrawer" aria-label="服务器历史记录" hidden>
+        <div class="drawer-header"><div><p class="eyebrow">SERVER HISTORY</p><h2>历史记录</h2></div><button class="icon-button" id="closeHistory" type="button" aria-label="关闭历史记录">×</button></div>
+        <div id="historyList" class="history-list"><p class="empty-history">还没有分析记录</p></div>
+      </aside>
       <div class="toast" id="toast" role="status" aria-live="polite"></div>
     </div>
     <script src="/static/app.js" defer></script>
