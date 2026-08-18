@@ -1,5 +1,5 @@
 {
-  "appid": "wx2bf03326b1828c1f",
+  "appid": "wx037312cf70d9f04d",
   "compileType": "miniprogram",
   "libVersion": "3.8.10",
   "miniprogramRoot": "./",
@@ -9,7 +9,7 @@
     "enhance": true,
     "minified": true,
     "postcss": true,
-    "urlCheck": false,
+    "urlCheck": true,
     "compileWorklet": false,
     "uglifyFileName": false,
     "uploadWithSourceMap": true,

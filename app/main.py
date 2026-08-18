@@ -142,6 +142,11 @@ def parse_vision_payload(payload: dict[str, Any]) -> VisualAnalysis:
         content = payload["choices"][0]["message"]["content"]
         if isinstance(content, list):
             content = "".join(part.get("text", "") for part in content)
+        content = content.strip()
+        if content.startswith("```json") and content.endswith("```"):
+            content = content[7:-3].strip()
+        elif content.startswith("```") and content.endswith("```"):
+            content = content[3:-3].strip()
         return VisualAnalysis.model_validate(json.loads(content))
     except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=502, detail="Vision API 返回了无法解析的结构化结果") from exc
@@ -150,20 +155,49 @@ def parse_vision_payload(payload: dict[str, Any]) -> VisualAnalysis:
 async def call_vision(images: list[tuple[bytes, str, str]]) -> VisualAnalysis:
     if not OPENAI_API_KEY:
         raise HTTPException(status_code=503, detail="服务尚未配置 OPENAI_API_KEY，无法进行真实分析")
-    content: list[dict[str, Any]] = [{"type": "text", "text": "你是视觉分析专家。只返回符合 JSON Schema 的 JSON，使用简洁中文，描述可见事实，不猜测品牌和身份。若输入是视频关键帧，请填写 timeline 并描述镜头和主体运动；图片的 timeline 返回空数组。"}]
+    instructions = (
+        "分析输入媒体，只返回 JSON，不要 Markdown。必须完整包含且不得省略这些字段："
+        "subject、scene、composition、camera、lighting、color、style、details、negative_prompt、confidence、timeline。"
+        "前七项是简洁中文字符串；details 和 negative_prompt 是字符串数组；confidence 是 0 到 100 的整数；"
+        "timeline 是对象数组，每项必须包含 start、end、description、camera_motion、subject_motion。"
+        "只描述可见事实，不猜测品牌和身份。视频关键帧需要填写 timeline；单张图片的 timeline 返回空数组。"
+        "即使画面简单也必须填写全部字段。"
+    )
+    content: list[dict[str, Any]] = [{"type": "text", "text": instructions}]
     for data, content_type, label in images:
         content.append({"type": "text", "text": f"参考帧：{label}"})
         content.append({"type": "image_url", "image_url": {"url": as_data_url(data, content_type)}})
-    body = {"model": OPENAI_MODEL, "temperature": 0.15, "response_format": {"type": "json_schema", "json_schema": {"name": "visual_analysis", "strict": True, "schema": ANALYSIS_SCHEMA}}, "messages": [{"role": "user", "content": content}]}
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=15.0)) as client:
-            response = await client.post(f"{OPENAI_BASE_URL}/chat/completions", headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}, json=body)
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail="无法连接 Vision API") from exc
-    if response.is_error:
-        logger.error("Vision API %s: %s", response.status_code, response.text[:500])
-        raise HTTPException(status_code=502, detail="Vision API 请求失败，请检查模型、额度和 API key")
-    return parse_vision_payload(response.json())
+    messages = [
+        {"role": "system", "content": "你是视觉分析专家，必须严格执行用户指定的 JSON 输出格式。"},
+        {"role": "user", "content": content},
+    ]
+    formats = [
+        {"type": "json_schema", "json_schema": {"name": "visual_analysis", "strict": True, "schema": ANALYSIS_SCHEMA}},
+        {"type": "json_object"},
+    ]
+    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=15.0)) as client:
+        for attempt, response_format in enumerate(formats, start=1):
+            body = {"model": OPENAI_MODEL, "temperature": 0.15, "response_format": response_format, "messages": messages}
+            try:
+                response = await client.post(
+                    f"{OPENAI_BASE_URL}/chat/completions",
+                    headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+                    json=body,
+                )
+            except httpx.HTTPError as exc:
+                raise HTTPException(status_code=502, detail="无法连接 Vision API") from exc
+            if response.is_error:
+                logger.error("Vision API %s: %s", response.status_code, response.text[:500])
+                if attempt == len(formats):
+                    raise HTTPException(status_code=502, detail="Vision API 请求失败，请检查模型、额度和 API key")
+                continue
+            try:
+                return parse_vision_payload(response.json())
+            except HTTPException:
+                if attempt == len(formats):
+                    raise
+                logger.warning("Vision API 未遵循 JSON Schema，切换到兼容 JSON 模式重试")
+    raise HTTPException(status_code=502, detail="Vision API 未返回有效结果")
 
 
 def run_command(command: list[str]) -> str:

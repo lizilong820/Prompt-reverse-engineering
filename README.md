@@ -72,3 +72,5 @@ systemctl restart prompt-lens.service
 - `WX_AD_UNIT_ID`：激励广告积分必需；未配置时只能提交已有积分。
 - 微信后台配置 HTTPS 合法域名，并把 `miniprogram/config.js` 的 `API_BASE_URL` 替换为该域名。
 - 管理后台必须通过 HTTPS 或 SSH 隧道访问，不能在公网 HTTP 页面输入管理员密码。
+
+正式 API 域名当前配置为 `prompt.whaios.com`。DNS 需要添加 `A` 记录指向 `150.158.135.233`，解析生效后再签发 HTTPS 证书。
