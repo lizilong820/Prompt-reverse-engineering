@@ -9,3 +9,4 @@
 .segment text { color: #a83f2b; font-size: 22rpx; font-weight: 700; }.segment view { margin: 8rpx 0; font-size: 24rpx; line-height: 1.5; }.segment small { color: #77756e; font-size: 20rpx; }
 .prompt-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18rpx; }.prompt-head button { margin: 0; padding: 0 20rpx; height: 56rpx; line-height: 56rpx; color: #a83f2b; background: #f2ded6; font-size: 21rpx; }
 .prompt-block > text { font-size: 24rpx; line-height: 1.7; }
+.language-switch { display:flex; gap:10rpx; margin-bottom:16rpx; }.language-switch button { margin:0; padding:0 18rpx; height:52rpx; line-height:52rpx; color:#77756e; background:#f0ede7; font-size:21rpx; }.language-switch button.active { color:#fff; background:#252522; }

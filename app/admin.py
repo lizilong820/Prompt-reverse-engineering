@@ -82,13 +82,14 @@ async def overview(_: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
         users = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         active_users = db.execute("SELECT COUNT(*) FROM users WHERE is_blocked=0").fetchone()[0]
         jobs = db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+        depth_jobs = db.execute("SELECT COUNT(*) FROM depth_jobs").fetchone()[0]
         succeeded = db.execute("SELECT COUNT(*) FROM jobs WHERE status='succeeded'").fetchone()[0]
         processing = db.execute("SELECT COUNT(*) FROM jobs WHERE status='processing'").fetchone()[0]
         failed = db.execute("SELECT COUNT(*) FROM jobs WHERE status='failed'").fetchone()[0]
         credits = db.execute("SELECT COALESCE(SUM(credits),0) FROM users").fetchone()[0]
         consumed = db.execute("SELECT COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END),0) FROM credit_ledger").fetchone()[0]
         ad_claims = db.execute("SELECT COUNT(*) FROM reward_claims WHERE status='claimed'").fetchone()[0]
-    return {"users": users, "active_users": active_users, "jobs": jobs, "succeeded": succeeded, "processing": processing, "failed": failed, "credits": credits, "consumed_credits": consumed, "ad_claims": ad_claims, "ad_daily_limit": AD_DAILY_LIMIT}
+    return {"users": users, "active_users": active_users, "jobs": jobs, "depth_jobs": depth_jobs, "succeeded": succeeded, "processing": processing, "failed": failed, "credits": credits, "compute_count": credits, "consumed_credits": consumed, "ad_claims": ad_claims, "ad_daily_limit": AD_DAILY_LIMIT}
 
 
 @admin_router.get("/config")
@@ -107,7 +108,7 @@ async def config_status(_: dict[str, str] = Depends(admin_user)) -> dict[str, An
         "ad_configured": ad_configured,
         "admin_configured": bool(ADMIN_PASSWORD_HASH),
         "https_required": not dev_login,
-        "pricing": {"image": IMAGE_CREDIT_COST, "video": VIDEO_CREDIT_COST},
+        "pricing": {"image": IMAGE_CREDIT_COST, "video": VIDEO_CREDIT_COST, "depth": int(os.getenv("DEPTH_COMPUTE_COST", "1"))},
     }
 
 

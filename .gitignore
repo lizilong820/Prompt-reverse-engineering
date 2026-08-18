@@ -7,3 +7,4 @@ __pycache__/
 prompt-studio-app/
 miniprogram/project.private.config.json
 *.log
+tmp/

@@ -1,7 +1,7 @@
 {
   "pages": [
     "pages/index/index",
-    "pages/history/history",
+    "pages/tools/tools",
     "pages/result/result",
     "pages/profile/profile"
   ],
@@ -18,7 +18,7 @@
     "borderStyle": "black",
     "list": [
       { "pagePath": "pages/index/index", "text": "分析" },
-      { "pagePath": "pages/history/history", "text": "记录" },
+      { "pagePath": "pages/tools/tools", "text": "工具" },
       { "pagePath": "pages/profile/profile", "text": "我的" }
     ]
   },

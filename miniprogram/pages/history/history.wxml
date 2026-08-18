@@ -4,7 +4,7 @@
     <view class="job" wx:for="{{jobs}}" wx:key="id" data-id="{{item.id}}" bindtap="openJob">
       <view class="job-top"><text class="mode">{{item.mode === 'video' ? '视频' : '图片'}}</text><text class="status {{item.status}}">{{item.statusText}}</text></view>
       <view class="filename">{{item.filename}}</view>
-      <view class="job-meta"><text>{{item.cost}} 积分</text><text>{{item.createdText}}</text></view>
+      <view class="job-meta"><text>{{item.cost}} 次算力</text><text>{{item.createdText}}</text></view>
     </view>
   </view>
   <view wx:else class="empty">还没有分析记录</view>

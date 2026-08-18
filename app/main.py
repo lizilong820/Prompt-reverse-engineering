@@ -60,6 +60,8 @@ class VisualAnalysis(BaseModel):
     negative_prompt: list[str] = Field(default_factory=list)
     confidence: int = Field(ge=0, le=100)
     timeline: list[TimelineSegment] = Field(default_factory=list)
+    prompt_zh: str = ""
+    prompt_en: str = ""
 
 
 class PromptBundle(BaseModel):
@@ -67,6 +69,8 @@ class PromptBundle(BaseModel):
     midjourney: str
     flux: str
     video: str
+    chinese: str = ""
+    english: str = ""
 
 
 class AnalysisResponse(BaseModel):
@@ -99,11 +103,12 @@ ANALYSIS_SCHEMA: dict[str, Any] = {
         "details": {"type": "array", "items": {"type": "string"}},
         "negative_prompt": {"type": "array", "items": {"type": "string"}},
         "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
+        "prompt_zh": {"type": "string"}, "prompt_en": {"type": "string"},
         "timeline": {"type": "array", "items": {"type": "object", "additionalProperties": False,
             "properties": {"start": {"type": "string"}, "end": {"type": "string"}, "description": {"type": "string"}, "camera_motion": {"type": "string"}, "subject_motion": {"type": "string"}},
             "required": ["start", "end", "description", "camera_motion", "subject_motion"]}},
     },
-    "required": ["subject", "scene", "composition", "camera", "lighting", "color", "style", "details", "negative_prompt", "confidence", "timeline"],
+    "required": ["subject", "scene", "composition", "camera", "lighting", "color", "style", "details", "negative_prompt", "confidence", "timeline", "prompt_zh", "prompt_en"],
 }
 
 
@@ -129,12 +134,13 @@ def save_analysis(mode: str, filename: str, analysis: VisualAnalysis, prompts: P
 def make_prompts(analysis: VisualAnalysis) -> PromptBundle:
     details = ", ".join(analysis.details) or "highly resolved natural textures"
     negative = ", ".join(analysis.negative_prompt) or "text, logo, watermark, artifacts"
-    universal = f"{analysis.subject}. {analysis.scene}. {analysis.composition}. {analysis.camera}. {analysis.lighting}. {analysis.color}. {analysis.style}. Details: {details}. Clean frame, coherent subject and environment."
+    universal = analysis.prompt_zh or f"{analysis.subject}。{analysis.scene}。{analysis.composition}。{analysis.camera}。{analysis.lighting}。{analysis.color}。{analysis.style}。细节：{details}。"
+    english = analysis.prompt_en or f"{analysis.subject}. {analysis.scene}. {analysis.composition}. {analysis.camera}. {analysis.lighting}. {analysis.color}. {analysis.style}. Details: {details}."
     midjourney = f"{analysis.subject}, {analysis.scene}, {analysis.composition}, {analysis.camera}, {analysis.lighting}, {analysis.style}, {details} --ar 4:5 --stylize 180 --no {negative}"
     flux = f"A cinematic editorial image of {analysis.subject}, in {analysis.scene}. {analysis.composition}. {analysis.camera}. {analysis.lighting}. Color palette: {analysis.color}. Style: {analysis.style}. Details: {details}. Avoid {negative}."
     timeline = " ".join(f"{item.start}-{item.end}: {item.description}; camera: {item.camera_motion}; subject: {item.subject_motion}." for item in analysis.timeline)
-    video = f"{analysis.subject}. {analysis.scene}. {analysis.composition}. {analysis.camera}. {analysis.lighting}. Preserve identity, wardrobe and spatial continuity. {timeline} 24fps, realistic motion blur, cinematic pacing. Avoid {negative}."
-    return PromptBundle(universal=universal, midjourney=midjourney, flux=flux, video=video)
+    video = universal if analysis.prompt_zh else f"{analysis.subject}. {analysis.scene}. {analysis.composition}. {analysis.camera}. {analysis.lighting}. Preserve identity, wardrobe and spatial continuity. {timeline} 24fps, realistic motion blur, cinematic pacing. Avoid {negative}."
+    return PromptBundle(universal=universal, midjourney=midjourney, flux=flux, video=video, chinese=universal, english=english)
 
 
 def as_data_url(content: bytes, content_type: str) -> str:
@@ -151,21 +157,30 @@ def parse_vision_payload(payload: dict[str, Any]) -> VisualAnalysis:
             content = content[7:-3].strip()
         elif content.startswith("```") and content.endswith("```"):
             content = content[3:-3].strip()
-        return VisualAnalysis.model_validate(json.loads(content))
+        payload = json.loads(content)
+        payload.setdefault("prompt_zh", "")
+        payload.setdefault("prompt_en", "")
+        return VisualAnalysis.model_validate(payload)
     except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=502, detail="Vision API 返回了无法解析的结构化结果") from exc
 
 
-async def call_vision(images: list[tuple[bytes, str, str]]) -> VisualAnalysis:
+async def call_vision(images: list[tuple[bytes, str, str]], analysis_depth: str = "detailed") -> VisualAnalysis:
     if not OPENAI_API_KEY:
         raise HTTPException(status_code=503, detail="服务尚未配置 OPENAI_API_KEY，无法进行真实分析")
+    depth_guidance = {
+        "standard": "标准维度：重点覆盖主体、场景、构图、镜头、光影、色彩和风格，提示词清晰精炼。",
+        "detailed": "详细维度：在标准维度基础上补充材质、纹理、空间层次、环境细节、氛围、动作和负面约束。",
+        "professional": "专业维度：完整描述镜头焦段、景别、机位、透视、布光方式、色彩管理、材质、后期质感、运动连续性、生成控制参数和负面约束。",
+    }.get(analysis_depth, "详细维度：充分描述可见画面及生成控制细节。")
     instructions = (
         "分析输入媒体，只返回 JSON，不要 Markdown。必须完整包含且不得省略这些字段："
-        "subject、scene、composition、camera、lighting、color、style、details、negative_prompt、confidence、timeline。"
+        "subject、scene、composition、camera、lighting、color、style、details、negative_prompt、confidence、timeline、prompt_zh、prompt_en。"
         "前七项是简洁中文字符串；details 和 negative_prompt 是字符串数组；confidence 是 0 到 100 的整数；"
         "timeline 是对象数组，每项必须包含 start、end、description、camera_motion、subject_motion。"
+        "prompt_zh 是可直接用于生成模型的完整中文提示词，prompt_en 是语义一致且自然专业的完整英文提示词，不得简单拼音化。"
         "只描述可见事实，不猜测品牌和身份。视频关键帧需要填写 timeline；单张图片的 timeline 返回空数组。"
-        "即使画面简单也必须填写全部字段。"
+        f"{depth_guidance}即使画面简单也必须填写全部字段。"
     )
     content: list[dict[str, Any]] = [{"type": "text", "text": instructions}]
     for data, content_type, label in images:
@@ -317,9 +332,11 @@ async def history_detail(analysis_id: int) -> AnalysisResponse:
     return AnalysisResponse(id=row["id"], created_at=row["created_at"], mode=row["mode"], source="history", filename=row["filename"], analysis=payload["analysis"], prompts=payload["prompts"], note="已从服务器历史记录恢复")
 
 
-async def analyze_media_upload(file: UploadFile, mode: str, check_content_security: bool = False) -> tuple[VisualAnalysis, PromptBundle]:
+async def analyze_media_upload(file: UploadFile, mode: str, check_content_security: bool = False, analysis_depth: str = "detailed") -> tuple[VisualAnalysis, PromptBundle]:
     if mode not in {"image", "video"}:
         raise HTTPException(status_code=400, detail="不支持的媒体类型")
+    if analysis_depth not in {"standard", "detailed", "professional"}:
+        raise HTTPException(status_code=400, detail="不支持的反推维度")
     allowed_types = IMAGE_TYPES if mode == "image" else VIDEO_TYPES
     max_bytes = MAX_IMAGE_BYTES if mode == "image" else MAX_VIDEO_BYTES
     if file.content_type not in allowed_types:
@@ -333,7 +350,7 @@ async def analyze_media_upload(file: UploadFile, mode: str, check_content_securi
         images = [(content, file.content_type, file.filename or "image")]
         if check_content_security:
             await check_images(images)
-        analysis = await call_vision(images)
+        analysis = await call_vision(images, analysis_depth)
     else:
         suffix = Path(file.filename or "video.mp4").suffix or ".mp4"
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as temp:
@@ -350,7 +367,7 @@ async def analyze_media_upload(file: UploadFile, mode: str, check_content_securi
             frames = video_frames(temp.name, duration)
             if check_content_security:
                 await check_images(frames)
-            analysis = await call_vision(frames)
+            analysis = await call_vision(frames, analysis_depth)
     prompts = make_prompts(analysis)
     return analysis, prompts
 

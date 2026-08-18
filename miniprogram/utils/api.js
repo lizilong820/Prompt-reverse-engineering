@@ -21,13 +21,13 @@ function api(path, options = {}) {
   });
 }
 
-function uploadJob(filePath, mode, idempotencyKey) {
+function uploadFileTask(path, filePath, formData) {
   return new Promise((resolve, reject) => {
     const task = wx.uploadFile({
-      url: API_BASE_URL + "/api/v1/jobs",
+      url: API_BASE_URL + path,
       filePath,
       name: "file",
-      formData: { mode, idempotency_key: idempotencyKey },
+      formData,
       header: { Authorization: "Bearer " + wx.getStorageSync("token") },
       success(response) {
         let data;
@@ -46,7 +46,29 @@ function uploadJob(filePath, mode, idempotencyKey) {
   });
 }
 
+function uploadJob(filePath, mode, idempotencyKey, analysisDepth = "detailed") {
+  return uploadFileTask("/api/v1/jobs", filePath, { mode, analysis_depth: analysisDepth, idempotency_key: idempotencyKey });
+}
+
+function uploadDepthJob(filePath, preset, idempotencyKey) {
+  return uploadFileTask("/api/v1/depth/jobs", filePath, { preset, idempotency_key: idempotencyKey });
+}
+
+function downloadAuthenticated(path) {
+  return new Promise((resolve, reject) => {
+    wx.downloadFile({
+      url: API_BASE_URL + path,
+      header: { Authorization: "Bearer " + wx.getStorageSync("token") },
+      success(response) {
+        if (response.statusCode >= 200 && response.statusCode < 300) return resolve(response.tempFilePath);
+        reject(new Error("视频下载失败"));
+      },
+      fail: reject
+    });
+  });
+}
+
 let optionsProgress = () => {};
 function onUploadProgress(callback) { optionsProgress = callback || (() => {}); }
 
-module.exports = { api, uploadJob, onUploadProgress };
+module.exports = { api, uploadJob, uploadDepthJob, downloadAuthenticated, onUploadProgress };
