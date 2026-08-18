@@ -103,6 +103,7 @@ async def config_status(_: dict[str, str] = Depends(admin_user)) -> dict[str, An
         "environment": "development" if dev_login else "production",
         "openai_configured": openai_configured,
         "wechat_configured": wechat_app_configured and wechat_secret_configured,
+        "content_security_configured": wechat_app_configured and wechat_secret_configured,
         "ad_configured": ad_configured,
         "admin_configured": bool(ADMIN_PASSWORD_HASH),
         "https_required": not dev_login,

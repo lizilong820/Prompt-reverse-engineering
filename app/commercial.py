@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import secrets
 import sqlite3
@@ -15,6 +16,8 @@ from starlette.datastructures import Headers
 from pydantic import BaseModel
 
 from app.main import DATA_DIR, IMAGE_TYPES, MAX_IMAGE_BYTES, MAX_VIDEO_BYTES, VIDEO_TYPES, analyze_media_upload
+
+logger = logging.getLogger("prompt-lens.jobs")
 
 WX_APP_ID = os.getenv("WX_APP_ID", "").strip()
 WX_APP_SECRET = os.getenv("WX_APP_SECRET", "").strip()
@@ -243,11 +246,12 @@ async def process_job(job_id: int, user_id: int, media_path: Path, filename: str
     try:
         with media_path.open("rb") as source:
             upload = UploadFile(file=source, filename=filename, headers=Headers({"content-type": content_type}))
-            analysis, prompts = await analyze_media_upload(upload, mode)
+            analysis, prompts = await analyze_media_upload(upload, mode, check_content_security=True)
         result = json.dumps({"analysis": analysis.model_dump(), "prompts": prompts.model_dump()}, ensure_ascii=False)
         with connect() as db:
             db.execute("UPDATE jobs SET status='succeeded', result_json=?, updated_at=? WHERE id=?", (result, utc_now().isoformat(), job_id))
     except Exception as exc:
+        logger.exception("Job failed: job_id=%s user_id=%s mode=%s", job_id, user_id, mode)
         with connect() as db:
             db.execute("BEGIN IMMEDIATE")
             change_credits(db, user_id, cost, "job_refund", "job", str(job_id), f"job:refund:{job_id}")

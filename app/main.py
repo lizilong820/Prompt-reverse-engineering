@@ -16,6 +16,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from app.wechat_security import check_images
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("prompt-lens")
@@ -243,6 +244,7 @@ async def health() -> dict[str, Any]:
         "configured": bool(OPENAI_API_KEY),
         "openai_configured": bool(OPENAI_API_KEY),
         "wechat_configured": bool(os.getenv("WX_APP_ID", "").strip() and os.getenv("WX_APP_SECRET", "").strip()),
+        "content_security_configured": bool(os.getenv("WX_APP_ID", "").strip() and os.getenv("WX_APP_SECRET", "").strip()),
         "ad_configured": bool(os.getenv("WX_AD_UNIT_ID", "").strip()),
         "admin_configured": bool(os.getenv("ADMIN_PASSWORD_HASH", "").strip()),
         "dev_login": dev_login,
@@ -281,7 +283,7 @@ async def history_detail(analysis_id: int) -> AnalysisResponse:
     return AnalysisResponse(id=row["id"], created_at=row["created_at"], mode=row["mode"], source="history", filename=row["filename"], analysis=payload["analysis"], prompts=payload["prompts"], note="已从服务器历史记录恢复")
 
 
-async def analyze_media_upload(file: UploadFile, mode: str) -> tuple[VisualAnalysis, PromptBundle]:
+async def analyze_media_upload(file: UploadFile, mode: str, check_content_security: bool = False) -> tuple[VisualAnalysis, PromptBundle]:
     if mode not in {"image", "video"}:
         raise HTTPException(status_code=400, detail="不支持的媒体类型")
     allowed_types = IMAGE_TYPES if mode == "image" else VIDEO_TYPES
@@ -294,7 +296,10 @@ async def analyze_media_upload(file: UploadFile, mode: str) -> tuple[VisualAnaly
             raise HTTPException(status_code=413, detail=f"文件不能超过 {max_bytes // (1024 * 1024)}MB")
         if not content:
             raise HTTPException(status_code=400, detail="上传文件为空")
-        analysis = await call_vision([(content, file.content_type, file.filename or "image")])
+        images = [(content, file.content_type, file.filename or "image")]
+        if check_content_security:
+            await check_images(images)
+        analysis = await call_vision(images)
     else:
         suffix = Path(file.filename or "video.mp4").suffix or ".mp4"
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as temp:
@@ -308,7 +313,10 @@ async def analyze_media_upload(file: UploadFile, mode: str) -> tuple[VisualAnaly
                 raise HTTPException(status_code=400, detail="上传文件为空")
             temp.flush()
             duration = get_video_duration(temp.name)
-            analysis = await call_vision(video_frames(temp.name, duration))
+            frames = video_frames(temp.name, duration)
+            if check_content_security:
+                await check_images(frames)
+            analysis = await call_vision(frames)
     prompts = make_prompts(analysis)
     return analysis, prompts
 
