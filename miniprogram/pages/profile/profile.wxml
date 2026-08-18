@@ -6,4 +6,5 @@
     <button class="menu-button" bindtap="openHistory"><view><text class="menu-title">最近记录</text><text class="menu-meta">{{totalCount}} 条任务记录</text></view><text class="menu-arrow">›</text></button>
     <button class="menu-button" bindtap="openLedger"><view><text class="menu-title">算力明细</text><text class="menu-meta">查看获得与消耗记录</text></view><text class="menu-arrow">›</text></button>
   </view>
+  <view wx:if="{{nativeAdVisible}}" class="native-ad-slot"><ad-custom unit-id="adunit-718a5452e18564db" bindload="adLoad" binderror="adError" bindclose="adClose"></ad-custom></view>
 </view>

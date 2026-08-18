@@ -11,4 +11,5 @@
   <button class="primary submit" bindtap="submit" disabled="{{submitting || (sourceMode === 'upload' ? !filePath : !videoLink)}}">{{submitting ? '正在提交 ' + progress + '%' : '消耗 1 次算力开始反推'}}</button>
   <button wx:if="{{computeCount < 1}}" class="secondary ad-action" bindtap="watchRewardAd">次数不足 · 看广告增加 1 次</button>
   <view class="notice">分析失败自动返还 · 每日最多观看 20 次激励广告</view>
+  <view wx:if="{{nativeAdVisible}}" class="native-ad-slot"><ad-custom unit-id="adunit-718a5452e18564db" bindload="adLoad" binderror="adError" bindclose="adClose"></ad-custom></view>
 </view>

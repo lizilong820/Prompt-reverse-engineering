@@ -9,3 +9,5 @@ button { line-height: 1; }
 .primary[disabled] { color: #6f766f; border-color: #383d38; background: #222522; }
 .secondary { display: flex; align-items: center; justify-content: center; min-height: 76rpx; border: 1rpx solid #383d38; border-radius: 8rpx; color: #f3f5f1; background: #222522; font-size: 24rpx; }
 .empty { padding: 120rpx 30rpx; color: #98938a; text-align: center; font-size: 25rpx; }
+.native-ad-slot { box-sizing:border-box; width:100%; min-height:220rpx; margin-top:24rpx; }
+.native-ad-slot ad-custom { display:block; width:100%; }

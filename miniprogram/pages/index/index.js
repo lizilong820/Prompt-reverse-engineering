@@ -3,7 +3,7 @@ const { AD_UNIT_ID } = require("../../config");
 const { ensurePrivacyAuthorized } = require("../../utils/privacy");
 
 Page({
-  data: { mode: "image", sourceMode: "upload", computeCount: 0, adReward: 1, adRemaining: 20, filePath: "", fileName: "", fileSize: "", videoLink: "", submitting: false, progress: 0, adLoading: false },
+  data: { mode: "image", sourceMode: "upload", computeCount: 0, adReward: 1, adRemaining: 20, filePath: "", fileName: "", fileSize: "", videoLink: "", submitting: false, progress: 0, adLoading: false, nativeAdVisible: true },
   rewardAd: null,
   active: true,
   onLoad() {
@@ -19,6 +19,9 @@ Page({
   switchMode(event) { this.setData({ mode: event.currentTarget.dataset.mode, sourceMode: "upload", filePath: "", fileName: "", fileSize: "", videoLink: "" }); },
   switchSource(event) { this.setData({ sourceMode: event.currentTarget.dataset.source, filePath: "", fileName: "", fileSize: "" }); },
   onVideoLinkInput(event) { this.setData({ videoLink: event.detail.value }); },
+  adLoad() { this.setData({ nativeAdVisible: true }); console.log("原生模板广告加载成功"); },
+  adError(error) { this.setData({ nativeAdVisible: false }); console.error("原生模板广告加载失败", error); },
+  adClose() { this.setData({ nativeAdVisible: false }); console.log("原生模板广告关闭"); },
   async chooseMedia() {
     if (!(await ensurePrivacyAuthorized())) return;
     wx.chooseMedia({ count: 1, mediaType: [this.data.mode], sourceType: ["album", "camera"], maxDuration: 90, success: ({ tempFiles }) => { const file = tempFiles[0]; if (!file || !this.active) return; const size = file.size || 0; const max = this.data.mode === "image" ? 12 : 180; if (size > max * 1024 * 1024) return wx.showToast({ title: "文件超过 " + max + "MB", icon: "none" }); this.setData({ filePath: file.tempFilePath, fileName: file.tempFilePath.split("/").pop(), fileSize: (size / 1024 / 1024).toFixed(2) + " MB" }); } });
