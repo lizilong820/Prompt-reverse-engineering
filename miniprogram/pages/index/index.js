@@ -5,15 +5,33 @@ const { ensurePrivacyAuthorized } = require("../../utils/privacy");
 Page({
   data: { mode: "image", sourceMode: "upload", computeCount: 0, adReward: 1, adRemaining: 20, filePath: "", fileName: "", fileSize: "", videoLink: "", submitting: false, progress: 0, adLoading: false },
   rewardAd: null,
+  rewardAdErrorHandler: null,
   active: true,
   onLoad() {
     this.active = true;
     if (AD_UNIT_ID && wx.createRewardedVideoAd) {
+      if (this.rewardAd && this.rewardAdErrorHandler && this.rewardAd.offError) {
+        this.rewardAd.offError(this.rewardAdErrorHandler);
+      }
       this.rewardAd = wx.createRewardedVideoAd({ adUnitId: AD_UNIT_ID });
-      this.rewardAd.onError((error) => { if (this.active) this.setData({ adLoading: false }); wx.showToast({ title: "广告暂不可用", icon: "none" }); console.error(error); });
+      this.rewardAdErrorHandler = (error) => {
+        if (this.active) {
+          this.setData({ adLoading: false });
+          wx.showToast({ title: "广告暂不可用", icon: "none" });
+        }
+        console.error("激励视频广告加载失败", error);
+      };
+      this.rewardAd.onError(this.rewardAdErrorHandler);
     }
   },
-  onUnload() { this.active = false; onUploadProgress(); },
+  onUnload() {
+    this.active = false;
+    onUploadProgress();
+    if (this.rewardAd && this.rewardAdErrorHandler && this.rewardAd.offError) {
+      this.rewardAd.offError(this.rewardAdErrorHandler);
+      this.rewardAdErrorHandler = null;
+    }
+  },
   async onShow() { try { const user = await getApp().ensureLogin(); if (this.active) this.syncUser(user); } catch (error) { wx.showToast({ title: error.message, icon: "none" }); } },
   syncUser(user) { this.setData({ computeCount: user.compute_count ?? user.credits ?? 0, adReward: user.ad?.reward || 1, adRemaining: user.ad?.remaining_today ?? user.ad?.daily_limit ?? 20 }); },
   switchMode(event) { this.setData({ mode: event.currentTarget.dataset.mode, sourceMode: "upload", filePath: "", fileName: "", fileSize: "", videoLink: "" }); },
