@@ -216,30 +216,42 @@ def video_frames(video_path: str, duration: float) -> list[tuple[bytes, str, str
     frames: list[tuple[bytes, str, str]] = []
     for index, timestamp in enumerate(dict.fromkeys(round(value, 2) for value in timestamps), start=1):
         label = f"{timestamp:.2f}s / frame {index}"
-        # Fast seek is used first; accurate seek retries clips whose nearest keyframe is corrupt.
-        commands = [
-            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-ss", str(timestamp), "-i", video_path, "-frames:v", "1", "-vf", "scale=1280:-2,format=yuvj420p", "-c:v", "mjpeg", "-q:v", "3", "-f", "image2pipe", "pipe:1"],
-            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", video_path, "-ss", str(timestamp), "-frames:v", "1", "-vf", "scale=1280:-2,format=yuvj420p", "-c:v", "mjpeg", "-q:v", "3", "-f", "image2pipe", "pipe:1"],
-        ]
+        safe_end = max(0.0, duration - 0.5)
+        seek_points = dict.fromkeys(round(value, 2) for value in (timestamp, min(timestamp, safe_end), max(0.0, timestamp - 0.25), max(0.0, timestamp - 1.0)))
         frame_data = b""
-        for command in commands:
-            try:
-                result = subprocess.run(command, capture_output=True, check=True, timeout=45)
-            except (OSError, subprocess.SubprocessError):
-                continue
-            candidate = result.stdout
-            if not candidate:
-                continue
-            try:
-                with Image.open(BytesIO(candidate)) as image:
-                    image.verify()
-            except (OSError, ValueError):
-                continue
-            frame_data = candidate
-            break
+        frame_type = "image/jpeg"
+        last_error = ""
+        for seek_point in seek_points:
+            # Fast seek is used first; accurate seek and PNG output cover damaged keyframes and unusual codecs.
+            commands = [
+                (["-ss", str(seek_point), "-i", video_path, "-c:v", "mjpeg", "-q:v", "3", "-f", "image2pipe"], "image/jpeg"),
+                (["-i", video_path, "-ss", str(seek_point), "-c:v", "mjpeg", "-q:v", "3", "-f", "image2pipe"], "image/jpeg"),
+                (["-ss", str(seek_point), "-i", video_path, "-c:v", "png", "-f", "image2pipe"], "image/png"),
+            ]
+            for options, mime in commands:
+                command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-probesize", "50M", "-analyzeduration", "100M", *options, "-frames:v", "1", "-vf", "scale=1280:-2", "pipe:1"]
+                try:
+                    result = subprocess.run(command, capture_output=True, check=False, timeout=45)
+                except (OSError, subprocess.SubprocessError) as exc:
+                    last_error = str(exc)
+                    continue
+                last_error = result.stderr.decode("utf-8", errors="replace")[-300:].strip()
+                candidate = result.stdout
+                if result.returncode != 0 or not candidate:
+                    continue
+                try:
+                    with Image.open(BytesIO(candidate)) as image:
+                        image.verify()
+                except (OSError, ValueError):
+                    continue
+                frame_data, frame_type = candidate, mime
+                break
+            if frame_data:
+                break
         if not frame_data:
+            logger.error("Video frame extraction failed: label=%s duration=%.2f stderr=%s", label, duration, last_error)
             raise HTTPException(status_code=422, detail="视频关键帧提取失败")
-        frames.append((frame_data, "image/jpeg", label))
+        frames.append((frame_data, frame_type, label))
     return frames
 
 
