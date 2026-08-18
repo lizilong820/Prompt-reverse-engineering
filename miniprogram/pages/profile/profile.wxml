@@ -3,8 +3,8 @@
   <view class="balance"><text>当前算力次数</text><strong>{{computeCount}}</strong><small>图片、视频和深度工具均消耗 1 次</small></view>
   <view class="stats"><view><strong>{{totalCount}}</strong><text>累计任务</text></view><view><strong>{{jobs.length}}</strong><text>提示词反推</text></view><view><strong>{{depthJobs.length}}</strong><text>深度工具</text></view></view>
   <view class="menu-section">
-    <button class="menu-button" bindtap="openHistory"><view><text class="menu-title">最近记录</text><text class="menu-meta">{{totalCount}} 条任务记录</text></view><text class="menu-arrow">›</text></button>
-    <button class="menu-button" bindtap="openLedger"><view><text class="menu-title">算力明细</text><text class="menu-meta">查看获得与消耗记录</text></view><text class="menu-arrow">›</text></button>
+    <view class="menu-button" hover-class="menu-button-hover" bindtap="openHistory"><view><text class="menu-title">最近记录</text><text class="menu-meta">{{totalCount}} 条任务记录</text></view><text class="menu-arrow">›</text></view>
+    <view class="menu-button" hover-class="menu-button-hover" bindtap="openLedger"><view><text class="menu-title">算力明细</text><text class="menu-meta">查看获得与消耗记录</text></view><text class="menu-arrow">›</text></view>
   </view>
   <view wx:if="{{nativeAdVisible}}" class="native-ad-slot"><ad-custom unit-id="adunit-718a5452e18564db" bindload="adLoad" binderror="adError" bindclose="adClose"></ad-custom></view>
 </view>
