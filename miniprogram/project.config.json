@@ -1,7 +1,7 @@
 {
   "appid": "wx037312cf70d9f04d",
   "compileType": "miniprogram",
-  "libVersion": "3.8.10",
+  "libVersion": "3.17.1",
   "miniprogramRoot": "./",
   "projectname": "prompt-lens",
   "setting": {

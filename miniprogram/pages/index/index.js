@@ -1,5 +1,6 @@
 const { api, uploadJob, onUploadProgress } = require("../../utils/api");
 const { AD_UNIT_ID } = require("../../config");
+const { ensurePrivacyAuthorized } = require("../../utils/privacy");
 
 Page({
   data: { mode: "image", credits: 0, pricing: { image: 1, video: 3 }, currentCost: 1, adReward: 1, filePath: "", fileName: "", fileSize: "", submitting: false, progress: 0, adLoading: false },
@@ -13,7 +14,8 @@ Page({
   async onShow() { try { const user = await getApp().ensureLogin(); this.syncUser(user); } catch (error) { wx.showToast({ title: error.message, icon: "none" }); } },
   syncUser(user) { this.setData({ credits: user.credits, pricing: user.pricing || this.data.pricing, currentCost: (user.pricing || this.data.pricing)[this.data.mode], adReward: user.ad?.reward || 1 }); },
   switchMode(event) { const mode = event.currentTarget.dataset.mode; this.setData({ mode, currentCost: this.data.pricing[mode], filePath: "", fileName: "", fileSize: "" }); },
-  chooseMedia() {
+  async chooseMedia() {
+    if (!(await ensurePrivacyAuthorized())) return;
     wx.chooseMedia({ count: 1, mediaType: [this.data.mode], sourceType: ["album", "camera"], maxDuration: 90, success: ({ tempFiles }) => { const file = tempFiles[0]; const size = file.size || 0; const max = this.data.mode === "image" ? 12 : 180; if (size > max * 1024 * 1024) return wx.showToast({ title: "文件超过 " + max + "MB", icon: "none" }); this.setData({ filePath: file.tempFilePath, fileName: file.tempFilePath.split("/").pop(), fileSize: (size / 1024 / 1024).toFixed(2) + " MB" }); } });
   },
   async watchRewardAd() {

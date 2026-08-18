@@ -1,4 +1,5 @@
 const { api } = require("../../utils/api");
+const { ensurePrivacyAuthorized } = require("../../utils/privacy");
 Page({
   data: { job: null, analysis: { timeline: [] }, facts: [], prompt: "", errorMessage: "" },
   pollTimer: null,
@@ -16,5 +17,8 @@ Page({
       this.setData({ job, analysis, facts, prompt: job.result.prompts[job.mode === "video" ? "video" : "universal"] });
     } catch (error) { this.setData({ errorMessage: error.message }); }
   },
-  copyPrompt() { wx.setClipboardData({ data: this.data.prompt }); }
+  async copyPrompt() {
+    if (!(await ensurePrivacyAuthorized())) return;
+    wx.setClipboardData({ data: this.data.prompt });
+  }
 });
