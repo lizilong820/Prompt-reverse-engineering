@@ -1,1 +1,1 @@
-{ "navigationBarTitleText": "分析记录", "enablePullDownRefresh": true }
+{ "navigationBarTitleText": "最近记录", "enablePullDownRefresh": true, "backgroundColor": "#101110" }

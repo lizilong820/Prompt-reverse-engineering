@@ -1,8 +1,2 @@
-.page-header { display: flex; justify-content: space-between; align-items: flex-end; }.count { color: #a94430; font-size: 22rpx; font-weight: 700; }
-.jobs { display: grid; gap: 16rpx; margin-top: 34rpx; }
-.job { padding: 26rpx; border: 1rpx solid #dedbd3; border-radius: 16rpx; background: #fffdf9; box-shadow: 0 8rpx 18rpx rgba(47,43,36,.04); }
-.job-top, .job-meta { display: flex; justify-content: space-between; align-items: center; }
-.mode { padding: 6rpx 10rpx; border-radius: 6rpx; color: #a94430; background: #f7e5de; font-size: 20rpx; font-weight: 750; }
-.status { font-size: 21rpx; }.status.succeeded { color: #44705e; }.status.failed { color: #b34630; }.status.processing { color: #8a6e2e; }
-.filename { margin: 18rpx 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 28rpx; font-weight: 650; }
-.job-meta { color: #77756e; font-size: 21rpx; }
+.page-header { display:flex; align-items:flex-end; justify-content:space-between; padding-bottom:20rpx; border-bottom:1rpx solid #383d38; }.count { color:#d8ff3e; font-size:20rpx; font-weight:800; }
+.records { display:grid; gap:8rpx; margin-top:16rpx; }.record { display:flex; align-items:center; gap:14rpx; min-height:104rpx; padding:14rpx; border:1rpx solid #383d38; border-radius:6rpx; background:#191b19; }.record.clickable { border-color:#4b514b; }.record-mark { width:50rpx; height:50rpx; line-height:50rpx; flex:none; border-radius:4rpx; color:#11130d; background:#d8ff3e; text-align:center; font-size:18rpx; font-weight:900; }.record-copy { min-width:0; flex:1; }.record-copy strong,.record-copy text,.record-copy small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.record-copy strong { color:#f3f5f1; font-size:22rpx; }.record-copy text { margin-top:5rpx; color:#969d96; font-size:18rpx; }.record-copy small { margin-top:5rpx; color:#6f766f; font-size:16rpx; }.record-state { flex:none; color:#d8ff3e; font-size:18rpx; }.record-state.failed { color:#ff6b57; }

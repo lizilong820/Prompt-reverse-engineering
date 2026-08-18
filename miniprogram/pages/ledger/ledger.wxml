@@ -1,0 +1,10 @@
+<view class="page">
+  <view class="page-header"><view><text class="eyebrow">COMPUTE LEDGER</text><view class="section-title">算力明细</view></view><text class="count">{{ledger.length}} 条</text></view>
+  <view wx:if="{{ledger.length}}" class="ledger">
+    <view class="entry" wx:for="{{ledger}}" wx:key="id">
+      <view class="entry-copy"><strong>{{item.reasonText}}</strong><small>{{item.createdText}}</small></view>
+      <view class="amount {{item.amount > 0 ? 'plus' : 'minus'}}">{{item.amount > 0 ? '+' : ''}}{{item.amount}}<small>余额 {{item.balance_after}}</small></view>
+    </view>
+  </view>
+  <view wx:else class="empty">暂无算力记录</view>
+</view>

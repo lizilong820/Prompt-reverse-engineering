@@ -2,9 +2,8 @@
   <view class="profile-head"><view class="avatar">PL</view><view><text class="eyebrow">MY ACCOUNT</text><view class="section-title">我的算力</view></view></view>
   <view class="balance"><text>当前算力次数</text><strong>{{computeCount}}</strong><small>图片、视频和深度工具均消耗 1 次</small></view>
   <view class="stats"><view><strong>{{totalCount}}</strong><text>累计任务</text></view><view><strong>{{jobs.length}}</strong><text>提示词反推</text></view><view><strong>{{depthJobs.length}}</strong><text>深度工具</text></view></view>
-  <view class="ledger-title"><text class="eyebrow">ACTIVITY</text><view class="section-title">最近记录</view></view>
-  <view wx:if="{{jobs.length || depthJobs.length}}" class="recent"><view class="recent-item" wx:for="{{jobs}}" wx:key="id"><view><strong>{{item.mode === 'video' ? '视频反推' : '图片反推'}}</strong><small>{{item.filename}}</small></view><text>{{item.status === 'succeeded' ? '已完成' : item.status === 'failed' ? '已返还' : '分析中'}}</text></view><view class="recent-item" wx:for="{{depthJobs}}" wx:key="id"><view><strong>视频深度转换</strong><small>{{item.filename}}</small></view><text>{{item.status === 'completed' ? '已完成' : item.status === 'failed' ? '已返还' : '处理中'}}</text></view></view>
-  <view class="ledger-title"><text class="eyebrow">COMPUTE LEDGER</text><view class="section-title">算力明细</view></view>
-  <view wx:if="{{ledger.length}}" class="ledger"><view class="entry" wx:for="{{ledger}}" wx:key="id"><view><strong>{{item.reasonText}}</strong><small>{{item.createdText}}</small></view><view class="amount {{item.amount > 0 ? 'plus' : 'minus'}}">{{item.amount > 0 ? '+' : ''}}{{item.amount}}<small>余额 {{item.balance_after}}</small></view></view></view>
-  <view wx:else class="empty">暂无算力记录</view>
+  <view class="menu-section">
+    <button class="menu-button" bindtap="openHistory"><view><text class="menu-title">最近记录</text><text class="menu-meta">{{totalCount}} 条任务记录</text></view><text class="menu-arrow">›</text></button>
+    <button class="menu-button" bindtap="openLedger"><view><text class="menu-title">算力明细</text><text class="menu-meta">查看获得与消耗记录</text></view><text class="menu-arrow">›</text></button>
+  </view>
 </view>

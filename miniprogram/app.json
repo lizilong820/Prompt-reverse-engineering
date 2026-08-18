@@ -3,7 +3,9 @@
     "pages/index/index",
     "pages/tools/tools",
     "pages/result/result",
-    "pages/profile/profile"
+    "pages/profile/profile",
+    "pages/history/history",
+    "pages/ledger/ledger"
   ],
   "window": {
     "navigationBarTitleText": "Prompt Lens",
