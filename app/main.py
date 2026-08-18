@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from io import BytesIO
 import json
 import logging
 import os
@@ -15,6 +16,7 @@ import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from PIL import Image
 from pydantic import BaseModel, Field
 from app.wechat_security import check_images
 
@@ -212,12 +214,31 @@ def video_frames(video_path: str, duration: float) -> list[tuple[bytes, str, str
     timestamps = [0.0, duration * .2, duration * .4, duration * .6, duration * .8, max(0.0, duration - .1)]
     frames: list[tuple[bytes, str, str]] = []
     for index, timestamp in enumerate(dict.fromkeys(round(value, 2) for value in timestamps), start=1):
-        command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-ss", str(timestamp), "-i", video_path, "-frames:v", "1", "-vf", "scale=1280:-2", "-f", "image2", "pipe:1"]
-        try:
-            result = subprocess.run(command, capture_output=True, check=True, timeout=45)
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise HTTPException(status_code=500, detail="视频关键帧提取失败") from exc
-        frames.append((result.stdout, "image/jpeg", f"{timestamp:.2f}s / frame {index}"))
+        label = f"{timestamp:.2f}s / frame {index}"
+        # Fast seek is used first; accurate seek retries clips whose nearest keyframe is corrupt.
+        commands = [
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-ss", str(timestamp), "-i", video_path, "-frames:v", "1", "-vf", "scale=1280:-2,format=yuvj420p", "-c:v", "mjpeg", "-q:v", "3", "-f", "image2pipe", "pipe:1"],
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", video_path, "-ss", str(timestamp), "-frames:v", "1", "-vf", "scale=1280:-2,format=yuvj420p", "-c:v", "mjpeg", "-q:v", "3", "-f", "image2pipe", "pipe:1"],
+        ]
+        frame_data = b""
+        for command in commands:
+            try:
+                result = subprocess.run(command, capture_output=True, check=True, timeout=45)
+            except (OSError, subprocess.SubprocessError):
+                continue
+            candidate = result.stdout
+            if not candidate:
+                continue
+            try:
+                with Image.open(BytesIO(candidate)) as image:
+                    image.verify()
+            except (OSError, ValueError):
+                continue
+            frame_data = candidate
+            break
+        if not frame_data:
+            raise HTTPException(status_code=422, detail="视频关键帧提取失败")
+        frames.append((frame_data, "image/jpeg", label))
     return frames
 
 
