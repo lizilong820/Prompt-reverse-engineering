@@ -7,15 +7,15 @@
   ],
   "window": {
     "navigationBarTitleText": "Prompt Lens",
-    "navigationBarBackgroundColor": "#f7f6f2",
-    "navigationBarTextStyle": "black",
-    "backgroundColor": "#f2f0eb"
+    "navigationBarBackgroundColor": "#101110",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#101110"
   },
   "tabBar": {
-    "color": "#77756e",
-    "selectedColor": "#c64f35",
-    "backgroundColor": "#fbfaf7",
-    "borderStyle": "black",
+    "color": "#969d96",
+    "selectedColor": "#d8ff3e",
+    "backgroundColor": "#191b19",
+    "borderStyle": "white",
     "list": [
       { "pagePath": "pages/index/index", "text": "分析" },
       { "pagePath": "pages/tools/tools", "text": "工具" },

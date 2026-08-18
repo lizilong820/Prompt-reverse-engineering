@@ -1,38 +1,16 @@
-.index-page { padding-top: 24rpx; }
-.topline { display: flex; justify-content: space-between; align-items: center; }
-.brand { display: flex; align-items: center; gap: 14rpx; }
-.brand-mark { width: 58rpx; height: 58rpx; line-height: 58rpx; border-radius: 16rpx; color: #fff; background: #252522; text-align: center; font-size: 20rpx; font-weight: 800; letter-spacing: 1rpx; }
-.brand-name, .brand-sub { display: block; }
-.brand-name { font-size: 27rpx; font-weight: 800; }
-.brand-sub { margin-top: 5rpx; color: #858178; font-size: 19rpx; }
-.avatar-dot { width: 54rpx; height: 54rpx; line-height: 54rpx; border: 1rpx solid #d6d1c8; border-radius: 50%; color: #a94430; background: #f7e5de; text-align: center; font-size: 22rpx; font-weight: 750; }
-.balance-card { display: flex; justify-content: space-between; align-items: center; margin-top: 32rpx; padding: 28rpx 26rpx; border-radius: 18rpx; color: #fff; background: #252522; box-shadow: 0 18rpx 32rpx rgba(37,37,34,.16); }
-.balance-label { display: block; color: #bdbab2; font-size: 21rpx; }
-.balance-number { display: block; margin-top: 3rpx; font-size: 64rpx; font-weight: 800; letter-spacing: -2rpx; }
-.reward-button { margin: 0; padding: 0 18rpx; height: 64rpx; line-height: 64rpx; border-radius: 10rpx; color: #252522; background: #f3c9b9; font-size: 22rpx; font-weight: 750; }
-.reward-plus { margin-right: 4rpx; font-size: 25rpx; }
-.heading { margin: 46rpx 2rpx 26rpx; }
-.intro { display: block; max-width: 600rpx; margin-top: 13rpx; color: #77746c; font-size: 25rpx; line-height: 1.55; }
-.mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 10rpx; padding: 7rpx; border-radius: 14rpx; background: #e5e1d9; }
-.mode-item { display: flex; align-items: center; gap: 10rpx; padding: 22rpx 18rpx; border-radius: 10rpx; color: #77746c; font-size: 25rpx; }
-.mode-item.active { color: #252522; background: #fffdf9; box-shadow: 0 5rpx 14rpx rgba(45,40,32,.09); font-weight: 750; }
-.mode-icon { color: #b84a32; font-size: 29rpx; }
-.mode-cost { margin-left: auto; color: #a94430; font-size: 20rpx; font-weight: 750; }
-.media-box { height: 520rpx; margin-top: 18rpx; overflow: hidden; border: 2rpx dashed #c9c3b9; border-radius: 18rpx; background: #e8e4dc; }
-.media-box.has-file { border: 0; }
-.preview { width: 100%; height: 100%; }
-.upload-empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-.upload-icon { width: 78rpx; height: 78rpx; line-height: 70rpx; border: 2rpx solid #d7836d; border-radius: 50%; color: #ad452f; background: #f7e2da; text-align: center; font-size: 44rpx; }
-.upload-title { margin-top: 22rpx; font-size: 28rpx; font-weight: 750; }
-.upload-hint { margin-top: 10rpx; color: #89847a; font-size: 20rpx; }
-.file-meta { display: flex; justify-content: space-between; gap: 20rpx; padding: 15rpx 4rpx 2rpx; color: #858178; font-size: 20rpx; }
-.file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.flow { display: flex; align-items: center; margin: 30rpx 10rpx 24rpx; }
-.flow-item { display: flex; align-items: center; gap: 8rpx; color: #aaa49a; font-size: 21rpx; }
-.flow-item text { width: 38rpx; height: 38rpx; line-height: 38rpx; border-radius: 50%; background: #dfdbd2; text-align: center; font-size: 18rpx; }
-.flow-item.active { color: #ad452f; font-weight: 750; }
-.flow-item.active text { color: #fff; background: #bd4d35; }
-.flow-line { height: 1rpx; flex: 1; margin: 0 12rpx; background: #d9d4ca; }
-.submit { margin-top: 0; }
-.ad-action { margin-top: 14rpx; }
-.notice { margin-top: 17rpx; color: #969087; text-align: center; font-size: 20rpx; }
+.index-page { padding-top: 22rpx; }
+.topline { display:flex; align-items:center; justify-content:space-between; min-height:64rpx; padding-bottom:22rpx; border-bottom:1rpx solid #383d38; }
+.brand { display:flex; align-items:center; gap:14rpx; }
+.brand-mark { width:56rpx; height:56rpx; line-height:56rpx; border-radius:6rpx; color:#11130d; background:#d8ff3e; text-align:center; font-size:22rpx; font-weight:900; }
+.brand-name,.brand-sub { display:block; }.brand-name { color:#f3f5f1; font-size:26rpx; font-weight:800; letter-spacing:1rpx; }.brand-sub { margin-top:5rpx; color:#969d96; font-size:18rpx; }
+.avatar-dot { min-width:54rpx; height:46rpx; padding:0 10rpx; line-height:46rpx; border:1rpx solid #383d38; border-radius:6rpx; color:#d8ff3e; background:#191b19; text-align:center; font-size:20rpx; font-weight:800; }
+.balance-card { display:flex; align-items:center; justify-content:space-between; gap:18rpx; margin-top:24rpx; padding:24rpx; border:1rpx solid #383d38; border-radius:6rpx; background:#191b19; }
+.balance-label { display:block; color:#969d96; font-size:19rpx; }.balance-number { display:block; margin-top:5rpx; color:#d8ff3e; font-size:58rpx; font-weight:850; }
+.reward-button { margin:0; padding:0 17rpx; min-height:56rpx; border:1rpx solid #d8ff3e; border-radius:6rpx; color:#11130d; background:#d8ff3e; font-size:20rpx; font-weight:800; }.reward-button[disabled] { color:#6f766f; border-color:#383d38; background:#222522; }.reward-plus { margin-right:4rpx; font-size:22rpx; }
+.heading { margin:36rpx 0 22rpx; }.intro { display:block; max-width:610rpx; margin-top:12rpx; color:#969d96; font-size:23rpx; line-height:1.55; }
+.workflow-label { margin:18rpx 0 10rpx; color:#969d96; font-size:19rpx; font-weight:800; letter-spacing:1rpx; }
+.mode-switch,.source-switch { display:grid; grid-template-columns:1fr 1fr; gap:6rpx; padding:5rpx; border:1rpx solid #383d38; border-radius:6rpx; background:#191b19; }.mode-item,.source-item { display:flex; align-items:center; gap:8rpx; min-height:58rpx; padding:0 14rpx; border:1rpx solid transparent; border-radius:4rpx; color:#969d96; font-size:23rpx; }.mode-item.active,.source-item.active { color:#11130d; border-color:#d8ff3e; background:#d8ff3e; font-weight:800; }.mode-icon { color:#d8ff3e; font-size:25rpx; }.mode-item.active .mode-icon { color:#11130d; }.mode-cost { margin-left:auto; color:#969d96; font-size:18rpx; }.mode-item.active .mode-cost { color:#11130d; }.index-page > .source-switch { margin-top:14rpx; }
+.media-box { height:500rpx; margin-top:16rpx; overflow:hidden; border:1rpx dashed #4b514b; border-radius:6rpx; background:#141614; }.media-box.has-file { border-style:solid; border-color:#383d38; }.preview { width:100%; height:100%; }.upload-empty { height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; }.upload-icon { width:72rpx; height:72rpx; line-height:68rpx; border:1rpx solid #d8ff3e; border-radius:4rpx; color:#d8ff3e; text-align:center; font-size:38rpx; }.upload-title { margin-top:18rpx; color:#f3f5f1; font-size:26rpx; font-weight:750; }.upload-hint { margin-top:9rpx; color:#969d96; font-size:19rpx; }.file-meta { display:flex; justify-content:space-between; gap:20rpx; padding:13rpx 2rpx 0; color:#969d96; font-size:19rpx; }.file-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.link-source { margin-top:16rpx; padding:18rpx; border:1rpx solid #383d38; border-radius:6rpx; background:#191b19; }.link-source textarea { width:100%; min-height:150rpx; color:#f3f5f1; font-size:24rpx; line-height:1.5; }.link-source textarea::placeholder { color:#6f766f; }.link-source text { color:#969d96; font-size:19rpx; }
+.dimension-section { margin-top:24rpx; padding-top:20rpx; border-top:1rpx solid #383d38; }.field-title { margin-bottom:12rpx; color:#969d96; font-size:20rpx; font-weight:800; letter-spacing:1rpx; }.dimension-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:6rpx; }.dimension { min-height:92rpx; padding:13rpx 9rpx; border:1rpx solid #383d38; border-radius:4rpx; background:#141614; text-align:center; }.dimension.active { border-color:#d8ff3e; background:#20251a; }.dimension strong,.dimension text { display:block; }.dimension strong { color:#f3f5f1; font-size:22rpx; }.dimension text { margin-top:7rpx; color:#969d96; font-size:17rpx; line-height:1.35; }.dimension.active text { color:#d8ff3e; }
+.output-note { display:flex; align-items:center; justify-content:space-between; gap:14rpx; margin:18rpx 0; padding:14rpx 16rpx; border-left:3rpx solid #d8ff3e; background:#191b19; }.output-note strong { color:#d8ff3e; font-size:20rpx; }.output-note text { color:#969d96; font-size:19rpx; }.ad-action { margin-top:12rpx; }.notice { margin-top:14rpx; color:#6f766f; text-align:center; font-size:18rpx; }
