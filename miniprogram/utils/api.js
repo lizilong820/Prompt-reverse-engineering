@@ -33,9 +33,14 @@ function uploadJob(filePath, mode, idempotencyKey) {
         let data;
         try { data = JSON.parse(response.data); } catch (_) { return reject(new Error("服务器响应异常")); }
         if (response.statusCode >= 200 && response.statusCode < 300) return resolve(data);
-        const error = new Error(data.detail || "提交失败"); error.statusCode = response.statusCode; reject(error);
+        const error = new Error(data.detail || "提交失败"); error.statusCode = response.statusCode; error.stage = "upload"; reject(error);
       },
-      fail: reject
+      fail(error) {
+        const failure = new Error(error?.errMsg || "文件上传失败，请检查 uploadFile 合法域名");
+        failure.stage = "upload";
+        failure.original = error;
+        reject(failure);
+      }
     });
     task.onProgressUpdate((event) => optionsProgress(event.progress));
   });

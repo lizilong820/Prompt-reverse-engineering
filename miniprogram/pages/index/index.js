@@ -33,6 +33,6 @@ Page({
     if (this.data.credits < this.data.currentCost) return wx.showToast({ title: "积分不足", icon: "none" });
     const idempotencyKey = Date.now() + "-" + Math.random().toString(36).slice(2) + "-" + this.data.mode;
     this.setData({ submitting: true, progress: 0 }); onUploadProgress((progress) => this.setData({ progress }));
-    try { const job = await uploadJob(this.data.filePath, this.data.mode, idempotencyKey); await getApp().refreshMe(); wx.navigateTo({ url: "/pages/result/result?id=" + job.id }); } catch (error) { await getApp().refreshMe().then((user) => this.syncUser(user)).catch(() => {}); wx.showModal({ title: "分析失败", content: error.message || "积分已自动退回", showCancel: false }); } finally { this.setData({ submitting: false }); }
+    try { const job = await uploadJob(this.data.filePath, this.data.mode, idempotencyKey); await getApp().refreshMe(); wx.navigateTo({ url: "/pages/result/result?id=" + job.id }); } catch (error) { await getApp().refreshMe().then((user) => this.syncUser(user)).catch(() => {}); wx.showModal({ title: error.stage === "upload" ? "上传失败" : "提交失败", content: error.message || "文件未上传，未扣除积分", showCancel: false }); } finally { this.setData({ submitting: false }); }
   }
 });
