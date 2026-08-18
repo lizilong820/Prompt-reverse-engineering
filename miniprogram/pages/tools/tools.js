@@ -1,15 +1,12 @@
 const { api, uploadDepthJob, downloadAuthenticated } = require("../../utils/api");
 const { ensurePrivacyAuthorized } = require("../../utils/privacy");
 Page({
-  data: { sourceMode: "upload", filePath: "", fileName: "", videoLink: "", preset: "standard_depth", computeCount: 0, job: null, submitting: false, nativeAdVisible: true }, timer: null, active: true,
+  data: { sourceMode: "upload", filePath: "", fileName: "", videoLink: "", preset: "standard_depth", computeCount: 0, job: null, submitting: false }, timer: null, active: true,
   async onShow() { this.active = true; try { const user = await getApp().ensureLogin(); this.setData({ computeCount: user.compute_count ?? user.credits ?? 0 }); } catch (error) { wx.showToast({ title: error.message, icon: "none" }); } },
   onUnload() { this.active = false; if (this.timer) clearTimeout(this.timer); },
   chooseSource(event) { this.setData({ sourceMode: event.currentTarget.dataset.source, filePath: "", fileName: "", videoLink: "", job: null }); },
   choosePreset(event) { this.setData({ preset: event.currentTarget.dataset.preset }); },
   onLinkInput(event) { this.setData({ videoLink: event.detail.value }); },
-  adLoad() { this.setData({ nativeAdVisible: true }); console.log("原生模板广告加载成功"); },
-  adError(error) { this.setData({ nativeAdVisible: false }); console.error("原生模板广告加载失败", error); },
-  adClose() { this.setData({ nativeAdVisible: false }); console.log("原生模板广告关闭"); },
   async chooseVideo() { if (!(await ensurePrivacyAuthorized())) return; wx.chooseMedia({ count: 1, mediaType: ["video"], sourceType: ["album", "camera"], maxDuration: 300, success: ({ tempFiles }) => { const file = tempFiles[0]; if (!file) return; if (file.size > 500 * 1024 * 1024) return wx.showToast({ title: "视频不能超过 500MB", icon: "none" }); this.setData({ filePath: file.tempFilePath, fileName: file.tempFilePath.split("/").pop() }); } }); },
   async submit() {
     if (this.data.computeCount < 1) return wx.showToast({ title: "算力次数不足", icon: "none" });
