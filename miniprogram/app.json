@@ -17,8 +17,8 @@
     "backgroundColor": "#191b19",
     "borderStyle": "white",
     "list": [
-      { "pagePath": "pages/index/index", "text": "分析" },
-      { "pagePath": "pages/tools/tools", "text": "工具" },
+      { "pagePath": "pages/index/index", "text": "分析台" },
+      { "pagePath": "pages/tools/tools", "text": "深度转换" },
       { "pagePath": "pages/profile/profile", "text": "我的" }
     ]
   },
