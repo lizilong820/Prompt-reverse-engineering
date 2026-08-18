@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
-from app.commercial import AD_DAILY_LIMIT, connect, hash_token, change_credits, utc_now
+from app.commercial import AD_DAILY_LIMIT, IMAGE_CREDIT_COST, VIDEO_CREDIT_COST, connect, hash_token, change_credits, utc_now
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD_HASH = os.getenv("ADMIN_PASSWORD_HASH", "").strip()
@@ -89,6 +89,25 @@ async def overview(_: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
         consumed = db.execute("SELECT COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END),0) FROM credit_ledger").fetchone()[0]
         ad_claims = db.execute("SELECT COUNT(*) FROM reward_claims WHERE status='claimed'").fetchone()[0]
     return {"users": users, "active_users": active_users, "jobs": jobs, "succeeded": succeeded, "processing": processing, "failed": failed, "credits": credits, "consumed_credits": consumed, "ad_claims": ad_claims, "ad_daily_limit": AD_DAILY_LIMIT}
+
+
+@admin_router.get("/config")
+async def config_status(_: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
+    """Expose deployment readiness without returning any secret values."""
+    openai_configured = bool(os.getenv("OPENAI_API_KEY", "").strip())
+    wechat_app_configured = bool(os.getenv("WX_APP_ID", "").strip())
+    wechat_secret_configured = bool(os.getenv("WX_APP_SECRET", "").strip())
+    ad_configured = bool(os.getenv("WX_AD_UNIT_ID", "").strip())
+    dev_login = os.getenv("ENABLE_DEV_LOGIN", "false").lower() == "true"
+    return {
+        "environment": "development" if dev_login else "production",
+        "openai_configured": openai_configured,
+        "wechat_configured": wechat_app_configured and wechat_secret_configured,
+        "ad_configured": ad_configured,
+        "admin_configured": bool(ADMIN_PASSWORD_HASH),
+        "https_required": not dev_login,
+        "pricing": {"image": IMAGE_CREDIT_COST, "video": VIDEO_CREDIT_COST},
+    }
 
 
 @admin_router.get("/users")

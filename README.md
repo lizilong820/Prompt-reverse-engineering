@@ -22,7 +22,7 @@
 
 ## 必填配置
 
-服务器 /opt/prompt-lens/.env 需要配置 OPENAI_API_KEY、WX_APP_ID、WX_APP_SECRET。
+服务器 `/opt/prompt-lens/.env` 必须配置 `OPENAI_API_KEY`、`WX_APP_ID`、`WX_APP_SECRET`；缺少任一项时，服务会返回明确的配置错误，不会返回演示结果。
 
 小程序 miniprogram/config.js 需要配置已备案 HTTPS API 域名和激励视频 AD_UNIT_ID。project.config.json 的 appid 需要替换为真实小程序 AppID。
 
@@ -62,3 +62,13 @@ systemctl restart prompt-lens.service
 ```
 
 后台支持总览、用户搜索、积分调整、封禁/解封、积分流水、任务状态和手动退款。管理员接口使用独立的 PBKDF2 密码哈希和短期 session token。
+
+后台登录后会显示部署诊断：OpenAI、微信登录、激励广告和 HTTPS 状态。只有配置完成后才算可交付。
+
+## 线上交付阻断项
+
+- `OPENAI_API_KEY`：真实视觉分析必需，不能用占位值。
+- `WX_APP_ID` / `WX_APP_SECRET`：真实微信登录必需。
+- `WX_AD_UNIT_ID`：激励广告积分必需；未配置时只能提交已有积分。
+- 微信后台配置 HTTPS 合法域名，并把 `miniprogram/config.js` 的 `API_BASE_URL` 替换为该域名。
+- 管理后台必须通过 HTTPS 或 SSH 隧道访问，不能在公网 HTTP 页面输入管理员密码。

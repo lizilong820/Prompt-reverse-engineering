@@ -1,8 +1,8 @@
-const DEVELOPMENT = true;
+const DEVELOPMENT = false;
 
 module.exports = {
-  // 正式发布前将 DEVELOPMENT 改为 false，并配置已备案 HTTPS 域名。
+  // 微信小程序只能请求已备案 HTTPS 合法域名；发布前替换为你的正式 API 域名。
   DEVELOPMENT,
-  API_BASE_URL: DEVELOPMENT ? "http://150.158.135.233:9001" : "https://api.example.com",
+  API_BASE_URL: "https://api.example.com",
   AD_UNIT_ID: ""
 };

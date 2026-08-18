@@ -203,7 +203,17 @@ app.mount("/admin/static", StaticFiles(directory=ADMIN_STATIC_DIR), name="admin-
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
-    return {"status": "ok", "configured": bool(OPENAI_API_KEY), "video_enabled": subprocess.run(["which", "ffmpeg"], capture_output=True).returncode == 0}
+    dev_login = os.getenv("ENABLE_DEV_LOGIN", "false").lower() == "true"
+    return {
+        "status": "ok",
+        "configured": bool(OPENAI_API_KEY),
+        "openai_configured": bool(OPENAI_API_KEY),
+        "wechat_configured": bool(os.getenv("WX_APP_ID", "").strip() and os.getenv("WX_APP_SECRET", "").strip()),
+        "ad_configured": bool(os.getenv("WX_AD_UNIT_ID", "").strip()),
+        "admin_configured": bool(os.getenv("ADMIN_PASSWORD_HASH", "").strip()),
+        "dev_login": dev_login,
+        "video_enabled": subprocess.run(["which", "ffmpeg"], capture_output=True).returncode == 0,
+    }
 
 
 @app.get("/", response_class=FileResponse)
