@@ -36,3 +36,29 @@
 6. 关闭开发者工具的“不校验合法域名”后完成真机测试。
 
 激励视频的 isEnded 结果来自微信客户端。服务端已有一次性凭证、防重放、每日上限和冷却时间，但仍应结合设备、IP、行为频率和异常账户封禁加强风控。
+
+## 管理后台
+
+管理地址：`/admin`
+
+生成管理员密码哈希：
+
+```bash
+cd /opt/prompt-lens
+.venv/bin/python -m app.admin_password
+```
+
+把输出写入 `/opt/prompt-lens/.env`：
+
+```env
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD_HASH=生成的哈希
+```
+
+然后重启服务：
+
+```bash
+systemctl restart prompt-lens.service
+```
+
+后台支持总览、用户搜索、积分调整、封禁/解封、积分流水、任务状态和手动退款。管理员接口使用独立的 PBKDF2 密码哈希和短期 session token。

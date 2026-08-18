@@ -55,12 +55,18 @@ def connect() -> sqlite3.Connection:
             openid TEXT NOT NULL UNIQUE,
             unionid TEXT,
             credits INTEGER NOT NULL DEFAULT 0 CHECK(credits >= 0),
+            is_blocked INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS sessions (
             token_hash TEXT PRIMARY KEY,
             user_id INTEGER NOT NULL REFERENCES users(id),
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS admin_sessions (
+            token_hash TEXT PRIMARY KEY,
             expires_at TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
@@ -101,6 +107,10 @@ def connect() -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_jobs_user_created ON jobs(user_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_ledger_user_created ON credit_ledger(user_id, id DESC);
     """)
+    try:
+        db.execute("ALTER TABLE users ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
     return db
 
 
@@ -162,6 +172,8 @@ def current_user(authorization: str | None = Header(default=None)) -> dict[str, 
         row = db.execute("SELECT users.* FROM sessions JOIN users ON users.id=sessions.user_id WHERE sessions.token_hash=? AND sessions.expires_at>?", (hash_token(authorization[7:]), utc_now().isoformat())).fetchone()
     if not row:
         raise HTTPException(status_code=401, detail="登录已过期")
+    if row["is_blocked"]:
+        raise HTTPException(status_code=403, detail="账户已被限制使用")
     return dict(row)
 
 

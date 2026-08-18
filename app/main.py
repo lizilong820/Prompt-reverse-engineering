@@ -22,6 +22,7 @@ logger = logging.getLogger("prompt-lens")
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
+ADMIN_STATIC_DIR = BASE_DIR / "admin_static"
 DATA_DIR = Path(os.getenv("DATA_DIR", str(BASE_DIR / "data")))
 DB_PATH = DATA_DIR / "prompt-lens.sqlite3"
 MAX_IMAGE_BYTES = int(os.getenv("MAX_IMAGE_MB", "12")) * 1024 * 1024
@@ -197,6 +198,7 @@ def get_video_duration(path: str) -> float:
 
 app = FastAPI(title="Prompt Lens API", version="1.1.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/admin/static", StaticFiles(directory=ADMIN_STATIC_DIR), name="admin-static")
 
 
 @app.get("/health")
@@ -207,6 +209,11 @@ async def health() -> dict[str, Any]:
 @app.get("/", response_class=FileResponse)
 async def index() -> Path:
     return STATIC_DIR / "index.html"
+
+
+@app.get("/admin", response_class=FileResponse)
+async def admin_index() -> Path:
+    return ADMIN_STATIC_DIR / "index.html"
 
 
 @app.get("/api/history", response_model=list[HistoryItem])
@@ -274,6 +281,8 @@ async def analyze(file: UploadFile = File(...), mode: str = Form("image"), model
 
 
 from app.commercial import commercial_router, recover_interrupted_jobs  # noqa: E402
+from app.admin import admin_router  # noqa: E402
 
 app.include_router(commercial_router)
+app.include_router(admin_router)
 recover_interrupted_jobs()
