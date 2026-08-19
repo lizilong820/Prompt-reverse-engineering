@@ -49,6 +49,11 @@ DEPTH_RESULTS_DIR = Path(DATA_DIR) / "depth-results"
 ANALYSIS_DEPTHS = {"standard", "detailed", "professional"}
 ANALYSIS_TASKS = {"reconstruct", "image_expand_video"}
 DEPTH_PRESETS = {"quick_preview", "standard_depth", "motion_character"}
+DEPTH_PRESET_OPTIONS: dict[str, dict[str, int | float]] = {
+    "quick_preview": {"max_output_side": 768, "max_output_fps": 12, "temporal_smoothing": 0.20, "stabilize_range": 0.78},
+    "standard_depth": {"max_output_side": 1280, "max_output_fps": 24, "temporal_smoothing": 0.25, "stabilize_range": 0.85},
+    "motion_character": {"max_output_side": 1024, "max_output_fps": 30, "temporal_smoothing": 0.32, "stabilize_range": 0.90},
+}
 
 commercial_router = APIRouter(prefix="/api/v1", tags=["mini-program"])
 
@@ -480,12 +485,13 @@ def fail_depth_job(local_job_id: int, user_id: int, cost: int, message: str) -> 
 
 async def submit_depth_upload_job(local_job_id: int, user_id: int, media_path: Path, filename: str, content_type: str, preset: str, cost: int) -> None:
     try:
+        processing_options = {"preset": preset, **DEPTH_PRESET_OPTIONS[preset]}
         async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=15.0)) as client:
             with media_path.open("rb") as source:
                 response = await client.post(
                     f"{DEPTH_SERVICE_BASE_URL}/api/jobs",
                     files={"file": (filename, source, content_type)},
-                    data={"preset": preset},
+                    data=processing_options,
                 )
         payload = response.json()
         if response.is_error or not payload.get("id"):
@@ -501,8 +507,9 @@ async def submit_depth_upload_job(local_job_id: int, user_id: int, media_path: P
 
 async def submit_depth_remote_job(local_job_id: int, user_id: int, url: str, preset: str, cost: int) -> None:
     try:
+        processing_options = {"url": url, "preset": preset, **DEPTH_PRESET_OPTIONS[preset]}
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
-            response = await client.post(f"{DEPTH_SERVICE_BASE_URL}/api/jobs/remote", json={"url": url, "preset": preset})
+            response = await client.post(f"{DEPTH_SERVICE_BASE_URL}/api/jobs/remote", json=processing_options)
         payload = response.json()
         if response.is_error or not payload.get("id"):
             raise RuntimeError(payload.get("message") or payload.get("detail") or "深度服务拒绝任务")

@@ -70,7 +70,11 @@ Page({
     this.poll(id);
   },
   decorateJob(job) {
-    return { ...job, expiresText: job.available_until ? new Date(job.available_until).toLocaleString() : "" };
+    const metadata = job.metadata || {};
+    const resultMeta = metadata.width && metadata.height
+      ? `${metadata.width} × ${metadata.height} · ${metadata.fps || "-"} FPS · ${metadata.frames || "-"} 帧`
+      : "";
+    return { ...job, resultMeta, expiresText: job.available_until ? new Date(job.available_until).toLocaleString() : "" };
   },
   async loadPreview(job) {
     if (!job.preview_url || this.data.resultVideoPath) return;

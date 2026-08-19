@@ -13,6 +13,7 @@ Page({
       ]);
       const analysisLabels = { succeeded: "已完成", failed: "已返还", processing: "分析中" };
       const depthLabels = { completed: "已完成", expired: "已过期", failed: "已返还", submitting: "提交中", queued: "等待中", downloading: "下载中", loading_model: "加载模型", processing: "处理中", encoding: "编码中", finalizing: "保存结果中" };
+      const depthPresetLabels = { quick_preview: "快速预览", standard_depth: "标准深度", motion_character: "人物动作" };
       const records = [
         ...jobs.map((job) => ({
           ...job,
@@ -26,7 +27,7 @@ Page({
           ...job,
           recordKey: "depth-" + job.id,
           recordType: "depth",
-          title: "视频深度转换",
+          title: "视频深度转换 · " + (depthPresetLabels[job.preset] || "标准深度"),
           statusText: depthLabels[job.status] || job.status,
           createdText: new Date(job.created_at).toLocaleString()
         }))
