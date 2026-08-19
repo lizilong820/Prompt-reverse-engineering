@@ -12,7 +12,7 @@ fi
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip --no-cache-dir
 .venv/bin/pip install --no-cache-dir -r requirements.txt
-.venv/bin/python -m playwright install chromium
+PLAYWRIGHT_BROWSERS_PATH="$APP_DIR/.playwright-browsers" .venv/bin/python -m playwright install chromium
 install -m 0644 deploy/prompt-lens.service /etc/systemd/system/prompt-lens.service
 systemctl daemon-reload
 systemctl enable --now prompt-lens.service

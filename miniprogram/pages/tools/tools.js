@@ -1,8 +1,8 @@
 const { api, uploadDepthJob, downloadAuthenticated } = require("../../utils/api");
-const { AD_UNIT_ID } = require("../../config");
+const { AD_UNIT_ID, API_BASE_URL } = require("../../config");
 const { ensurePrivacyAuthorized } = require("../../utils/privacy");
 Page({
-  data: { sourceMode: "upload", filePath: "", fileName: "", videoLink: "", preset: "standard_depth", computeCount: 0, adReward: 1, adRemaining: 20, job: null, resultVideoPath: "", previewLoading: false, submitting: false, adLoading: false }, timer: null, active: true, rewardAd: null, currentJobId: null,
+  data: { sourceMode: "upload", filePath: "", fileName: "", videoLink: "", preset: "standard_depth", computeCount: 0, adReward: 1, adRemaining: 20, job: null, resultVideoPath: "", previewLoading: false, submitting: false, adLoading: false }, timer: null, active: true, rewardAd: null, currentJobId: null, adFlowActive: false,
   onLoad() {
     this.active = true;
     if (AD_UNIT_ID && wx.createRewardedVideoAd) {
@@ -29,11 +29,18 @@ Page({
     this.stopPolling();
     this.setData({ sourceMode: event.currentTarget.dataset.source, filePath: "", fileName: "", videoLink: "", job: null, resultVideoPath: "", previewLoading: false });
   },
-  choosePreset(event) { this.setData({ preset: event.currentTarget.dataset.preset }); },
+  choosePreset(event) {
+    const preset = event.currentTarget.dataset.preset;
+    if (preset === this.data.preset) return;
+    this.stopPolling();
+    this.setData({ preset, job: null, resultVideoPath: "", previewLoading: false });
+  },
   onLinkInput(event) { this.setData({ videoLink: event.detail.value }); },
   async watchRewardAd() {
+    if (this.adFlowActive) return;
     if (!this.rewardAd) return wx.showToast({ title: "激励广告尚未配置", icon: "none" });
     if (this.data.adRemaining <= 0) return wx.showToast({ title: "今日奖励次数已用完", icon: "none" });
+    this.adFlowActive = true;
     this.setData({ adLoading: true });
     try {
       const prepared = await api("/api/v1/rewards/ad/prepare", { method: "POST" });
@@ -51,6 +58,7 @@ Page({
     } catch (error) {
       wx.showToast({ title: error.message || "领取失败", icon: "none" });
     } finally {
+      this.adFlowActive = false;
       if (this.active) this.setData({ adLoading: false });
     }
   },
@@ -80,7 +88,7 @@ Page({
     if (!job.preview_url || this.data.resultVideoPath) return;
     this.setData({ previewLoading: true });
     try {
-      const path = await downloadAuthenticated(job.preview_url);
+      const path = API_BASE_URL + job.preview_url;
       if (this.active && this.currentJobId === job.id) this.setData({ resultVideoPath: path });
     } catch (error) {
       if (this.active) wx.showToast({ title: error.message || "结果视频加载失败", icon: "none" });

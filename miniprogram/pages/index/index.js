@@ -5,6 +5,7 @@ const { ensurePrivacyAuthorized } = require("../../utils/privacy");
 Page({
   data: { mode: "image", imageTask: "reconstruct", sourceMode: "upload", computeCount: 0, adReward: 1, adRemaining: 20, filePath: "", fileName: "", fileSize: "", videoLink: "", submitting: false, progress: 0, adLoading: false },
   rewardAd: null,
+  adFlowActive: false,
   active: true,
   onLoad() {
     this.active = true;
@@ -27,8 +28,10 @@ Page({
     wx.chooseMedia({ count: 1, mediaType: [this.data.mode], sourceType: ["album", "camera"], maxDuration: 90, success: ({ tempFiles }) => { const file = tempFiles[0]; if (!file || !this.active) return; const size = file.size || 0; const max = this.data.mode === "image" ? 12 : 180; if (size > max * 1024 * 1024) return wx.showToast({ title: "文件超过 " + max + "MB", icon: "none" }); this.setData({ filePath: file.tempFilePath, fileName: file.tempFilePath.split("/").pop(), fileSize: (size / 1024 / 1024).toFixed(2) + " MB" }); } });
   },
   async watchRewardAd() {
+    if (this.adFlowActive) return;
     if (!this.rewardAd) return wx.showToast({ title: "激励广告尚未配置", icon: "none" });
     if (this.data.adRemaining <= 0) return wx.showToast({ title: "今日奖励次数已用完", icon: "none" });
+    this.adFlowActive = true;
     this.setData({ adLoading: true });
     try {
       const prepared = await api("/api/v1/rewards/ad/prepare", { method: "POST" });
@@ -37,7 +40,7 @@ Page({
       const result = await api("/api/v1/rewards/ad/complete", { method: "POST", data: { claim_token: prepared.claim_token } });
       if (this.active) this.setData({ computeCount: result.compute_count ?? result.credits, adRemaining: Math.max(0, this.data.adRemaining - 1) });
       wx.showToast({ title: "+" + result.rewarded + " 次算力" });
-    } catch (error) { wx.showToast({ title: error.message || "领取失败", icon: "none" }); } finally { if (this.active) this.setData({ adLoading: false }); }
+    } catch (error) { wx.showToast({ title: error.message || "领取失败", icon: "none" }); } finally { this.adFlowActive = false; if (this.active) this.setData({ adLoading: false }); }
   },
   async submit() {
     const usingLink = this.data.mode === "video" && this.data.sourceMode === "link";

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -40,20 +41,23 @@ IMAGE_CREDIT_COST = int(os.getenv("IMAGE_CREDIT_COST", "1"))
 VIDEO_CREDIT_COST = int(os.getenv("VIDEO_CREDIT_COST", "1"))
 AD_REWARD_CREDITS = int(os.getenv("AD_REWARD_CREDITS", "1"))
 AD_DAILY_LIMIT = int(os.getenv("AD_DAILY_LIMIT", "20"))
-AD_COOLDOWN_SECONDS = int(os.getenv("AD_COOLDOWN_SECONDS", "60"))
+AD_COOLDOWN_SECONDS = int(os.getenv("AD_COOLDOWN_SECONDS", "3"))
 DEPTH_COMPUTE_COST = int(os.getenv("DEPTH_COMPUTE_COST", "1"))
 DEPTH_SERVICE_BASE_URL = os.getenv("DEPTH_SERVICE_BASE_URL", "https://depth.whaios.com").rstrip("/")
 DEPTH_RESULT_RETENTION_HOURS = int(os.getenv("DEPTH_RESULT_RETENTION_HOURS", "24"))
+DEPTH_ARTIFACT_SECRET = os.getenv("DEPTH_ARTIFACT_SECRET", "").strip() or WX_APP_SECRET
 DB_PATH = Path(DATA_DIR) / "commercial.sqlite3"
 DEPTH_RESULTS_DIR = Path(DATA_DIR) / "depth-results"
 ANALYSIS_DEPTHS = {"standard", "detailed", "professional"}
 ANALYSIS_TASKS = {"reconstruct", "image_expand_video"}
 DEPTH_PRESETS = {"quick_preview", "standard_depth", "motion_character"}
 DEPTH_PRESET_OPTIONS: dict[str, dict[str, int | float]] = {
-    "quick_preview": {"max_output_side": 768, "max_output_fps": 12, "temporal_smoothing": 0.20, "stabilize_range": 0.78},
-    "standard_depth": {"max_output_side": 1280, "max_output_fps": 24, "temporal_smoothing": 0.25, "stabilize_range": 0.85},
-    "motion_character": {"max_output_side": 1024, "max_output_fps": 30, "temporal_smoothing": 0.32, "stabilize_range": 0.90},
+    "quick_preview": {"max_output_side": 768, "max_output_fps": 12, "temporal_smoothing": 0.05, "stabilize_range": 0.70},
+    "standard_depth": {"max_output_side": 1280, "max_output_fps": 24, "temporal_smoothing": 0.15, "stabilize_range": 0.82},
+    "motion_character": {"max_output_side": 1024, "max_output_fps": 30, "temporal_smoothing": 0.55, "stabilize_range": 0.95},
 }
+DEPTH_WAIT_TIMEOUT_SECONDS = int(os.getenv("DEPTH_WAIT_TIMEOUT_SECONDS", "1800"))
+DEPTH_WAIT_INTERVAL_SECONDS = int(os.getenv("DEPTH_WAIT_INTERVAL_SECONDS", "8"))
 
 commercial_router = APIRouter(prefix="/api/v1", tags=["mini-program"])
 
@@ -192,7 +196,7 @@ def recover_interrupted_jobs() -> None:
     """Refund jobs left in processing after an unclean service restart."""
     with connect() as db:
         rows = db.execute("SELECT id,user_id,cost FROM jobs WHERE status='processing'").fetchall()
-        depth_rows = db.execute("SELECT id,user_id,cost FROM depth_jobs WHERE status='submitting'").fetchall()
+        depth_rows = db.execute("SELECT id,user_id,cost FROM depth_jobs WHERE external_id IS NULL AND status IN ('submitting','waiting_service')").fetchall()
         if not rows and not depth_rows:
             return
         db.execute("BEGIN IMMEDIATE")
@@ -292,14 +296,16 @@ async def prepare_ad_reward(user: dict[str, Any] = Depends(current_user)) -> dic
     now = utc_now()
     token = secrets.token_urlsafe(32)
     with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        db.execute("UPDATE reward_claims SET status='expired' WHERE user_id=? AND status='issued'", (user["id"],))
         claimed = db.execute("SELECT COUNT(*) FROM reward_claims WHERE user_id=? AND status='claimed' AND substr(claimed_at,1,10)=?", (user["id"], now.date().isoformat())).fetchone()[0]
         if claimed >= AD_DAILY_LIMIT:
             raise HTTPException(status_code=429, detail="今日广告奖励次数已用完")
-        latest = db.execute("SELECT created_at FROM reward_claims WHERE user_id=? ORDER BY id DESC LIMIT 1", (user["id"],)).fetchone()
-        if latest and now - datetime.fromisoformat(latest["created_at"]) < timedelta(seconds=AD_COOLDOWN_SECONDS):
+        latest = db.execute("SELECT claimed_at FROM reward_claims WHERE user_id=? AND status='claimed' ORDER BY id DESC LIMIT 1", (user["id"],)).fetchone()
+        if latest and latest["claimed_at"] and now - datetime.fromisoformat(latest["claimed_at"]) < timedelta(seconds=AD_COOLDOWN_SECONDS):
             raise HTTPException(status_code=429, detail="操作过于频繁，请稍后再试")
-        db.execute("UPDATE reward_claims SET status='expired' WHERE status='issued' AND expires_at<=?", (now.isoformat(),))
         db.execute("INSERT INTO reward_claims(user_id,token_hash,status,expires_at,created_at) VALUES(?,?,?,?,?)", (user["id"], hash_token(token), "issued", (now + timedelta(minutes=10)).isoformat(), now.isoformat()))
+        db.commit()
     return {"claim_token": token, "expires_in": 600}
 
 
@@ -483,19 +489,40 @@ def fail_depth_job(local_job_id: int, user_id: int, cost: int, message: str) -> 
         db.commit()
 
 
+def depth_service_busy(response: httpx.Response, payload: dict[str, Any]) -> bool:
+    message = str(payload.get("message") or payload.get("detail") or "")
+    return response.status_code in {409, 429, 503} and ("另一个视频" in message or "稍后再试" in message or "busy" in message.lower())
+
+
+def mark_depth_waiting(local_job_id: int) -> None:
+    payload = {"status": "waiting_service", "progress": 0, "message": "前方任务处理中，正在排队"}
+    with connect() as db:
+        db.execute(
+            "UPDATE depth_jobs SET status='waiting_service',result_json=?,error_message=NULL,updated_at=? WHERE id=?",
+            (json.dumps(payload, ensure_ascii=False), utc_now().isoformat(), local_job_id),
+        )
+
+
 async def submit_depth_upload_job(local_job_id: int, user_id: int, media_path: Path, filename: str, content_type: str, preset: str, cost: int) -> None:
     try:
         processing_options = {"preset": preset, **DEPTH_PRESET_OPTIONS[preset]}
+        deadline = asyncio.get_running_loop().time() + DEPTH_WAIT_TIMEOUT_SECONDS
         async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=15.0)) as client:
-            with media_path.open("rb") as source:
-                response = await client.post(
-                    f"{DEPTH_SERVICE_BASE_URL}/api/jobs",
-                    files={"file": (filename, source, content_type)},
-                    data=processing_options,
-                )
-        payload = response.json()
-        if response.is_error or not payload.get("id"):
-            raise RuntimeError(payload.get("message") or payload.get("detail") or "深度服务拒绝任务")
+            while True:
+                with media_path.open("rb") as source:
+                    response = await client.post(
+                        f"{DEPTH_SERVICE_BASE_URL}/api/jobs",
+                        files={"file": (filename, source, content_type)},
+                        data=processing_options,
+                    )
+                payload = response.json()
+                if depth_service_busy(response, payload) and asyncio.get_running_loop().time() < deadline:
+                    mark_depth_waiting(local_job_id)
+                    await asyncio.sleep(DEPTH_WAIT_INTERVAL_SECONDS)
+                    continue
+                if response.is_error or not payload.get("id"):
+                    raise RuntimeError(payload.get("message") or payload.get("detail") or "深度服务拒绝任务")
+                break
         with connect() as db:
             db.execute("UPDATE depth_jobs SET external_id=?,status=?,result_json=?,updated_at=? WHERE id=?", (payload["id"], payload.get("status", "queued"), json.dumps(payload, ensure_ascii=False), utc_now().isoformat(), local_job_id))
     except Exception as exc:
@@ -508,11 +535,18 @@ async def submit_depth_upload_job(local_job_id: int, user_id: int, media_path: P
 async def submit_depth_remote_job(local_job_id: int, user_id: int, url: str, preset: str, cost: int) -> None:
     try:
         processing_options = {"url": url, "preset": preset, **DEPTH_PRESET_OPTIONS[preset]}
+        deadline = asyncio.get_running_loop().time() + DEPTH_WAIT_TIMEOUT_SECONDS
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
-            response = await client.post(f"{DEPTH_SERVICE_BASE_URL}/api/jobs/remote", json=processing_options)
-        payload = response.json()
-        if response.is_error or not payload.get("id"):
-            raise RuntimeError(payload.get("message") or payload.get("detail") or "深度服务拒绝任务")
+            while True:
+                response = await client.post(f"{DEPTH_SERVICE_BASE_URL}/api/jobs/remote", json=processing_options)
+                payload = response.json()
+                if depth_service_busy(response, payload) and asyncio.get_running_loop().time() < deadline:
+                    mark_depth_waiting(local_job_id)
+                    await asyncio.sleep(DEPTH_WAIT_INTERVAL_SECONDS)
+                    continue
+                if response.is_error or not payload.get("id"):
+                    raise RuntimeError(payload.get("message") or payload.get("detail") or "深度服务拒绝任务")
+                break
         with connect() as db:
             db.execute("UPDATE depth_jobs SET external_id=?,status=?,result_json=?,updated_at=? WHERE id=?", (payload["id"], payload.get("status", "queued"), json.dumps(payload, ensure_ascii=False), utc_now().isoformat(), local_job_id))
     except Exception as exc:
@@ -611,6 +645,19 @@ async def cache_depth_result(local_job_id: int, external_id: str) -> None:
         raise
 
 
+def depth_artifact_signature(row: sqlite3.Row, artifact: str, expires: int) -> str:
+    message = f"{row['id']}:{row['user_id']}:{artifact}:{expires}".encode("utf-8")
+    secret = DEPTH_ARTIFACT_SECRET.encode("utf-8")
+    return hmac.new(secret, message, hashlib.sha256).hexdigest()
+
+
+def signed_depth_artifact_url(row: sqlite3.Row, artifact: str, expiration: datetime) -> str:
+    expires_at = min(expiration, utc_now() + timedelta(hours=1))
+    expires = int(expires_at.timestamp())
+    signature = depth_artifact_signature(row, artifact, expires)
+    return f"/api/v1/depth/artifacts/{row['id']}/{artifact}?expires={expires}&signature={signature}"
+
+
 def depth_job_payload(row: sqlite3.Row, external: dict[str, Any] | None = None) -> dict[str, Any]:
     stored = json.loads(row["result_json"]) if row["result_json"] else {}
     source = external or stored
@@ -628,9 +675,9 @@ def depth_job_payload(row: sqlite3.Row, external: dict[str, Any] | None = None) 
         "available_until": expiration.isoformat() if expiration else None,
         "preview_url": None, "download_url": None,
     }
-    if status == "completed" and available:
-        payload["preview_url"] = f"/api/v1/depth/jobs/{row['id']}/preview"
-        payload["download_url"] = f"/api/v1/depth/jobs/{row['id']}/download"
+    if status == "completed" and available and expiration:
+        payload["preview_url"] = signed_depth_artifact_url(row, "preview", expiration)
+        payload["download_url"] = signed_depth_artifact_url(row, "download", expiration)
     return payload
 
 
@@ -691,7 +738,16 @@ async def list_depth_jobs(user: dict[str, Any] = Depends(current_user)) -> list[
     cleanup_expired_depth_results()
     with connect() as db:
         rows = db.execute("SELECT * FROM depth_jobs WHERE user_id=? ORDER BY id DESC LIMIT 30", (user["id"],)).fetchall()
-    return [depth_job_payload(row) for row in rows]
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        if row["external_id"] and row["status"] not in {"failed", "completed"}:
+            try:
+                results.append(await get_depth_job(row["id"], user))
+                continue
+            except HTTPException:
+                pass
+        results.append(depth_job_payload(row))
+    return results
 
 
 @commercial_router.get("/depth/jobs/{local_job_id}")
@@ -719,6 +775,10 @@ async def get_depth_job(local_job_id: int, user: dict[str, Any] = Depends(curren
         async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=8.0)) as client:
             response = await client.get(f"{DEPTH_SERVICE_BASE_URL}/api/jobs/{row['external_id']}")
         payload = response.json()
+        if response.status_code == 404:
+            fail_depth_job(local_job_id, user["id"], row["cost"], "深度任务已失效，算力次数已退回")
+            with connect() as db:
+                return depth_job_payload(db.execute("SELECT * FROM depth_jobs WHERE id=?", (local_job_id,)).fetchone())
         if response.is_error:
             raise RuntimeError(payload.get("message") or payload.get("detail") or "深度任务状态读取失败")
     except Exception as exc:
@@ -743,15 +803,9 @@ async def get_depth_job(local_job_id: int, user: dict[str, Any] = Depends(curren
     return depth_job_payload(fresh, payload)
 
 
-@commercial_router.get("/depth/jobs/{local_job_id}/{artifact}")
-async def depth_job_artifact(local_job_id: int, artifact: str, user: dict[str, Any] = Depends(current_user)) -> FileResponse:
+def serve_depth_artifact(row: sqlite3.Row, artifact: str) -> FileResponse:
     if artifact not in {"preview", "download"}:
         raise HTTPException(status_code=404, detail="文件不存在")
-    await get_depth_job(local_job_id, user)
-    with connect() as db:
-        row = db.execute("SELECT * FROM depth_jobs WHERE id=? AND user_id=?", (local_job_id, user["id"])).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="深度任务不存在")
     expiration = depth_result_expiration(row)
     if expiration and expiration <= utc_now():
         path = depth_result_path(row)
@@ -763,10 +817,39 @@ async def depth_job_artifact(local_job_id: int, artifact: str, user: dict[str, A
         raise HTTPException(status_code=404, detail="深度视频尚未生成")
     disposition = "attachment" if artifact == "download" else "inline"
     headers = {
-        "Content-Disposition": f'{disposition}; filename="depth-{local_job_id}{path.suffix}"',
+        "Content-Disposition": f'{disposition}; filename="depth-{row["id"]}{path.suffix}"',
         "Cache-Control": "private, max-age=300",
     }
     return FileResponse(path, media_type=row["artifact_content_type"] or "video/mp4", headers=headers)
+
+
+@commercial_router.get("/depth/artifacts/{local_job_id}/{artifact}")
+async def public_depth_artifact(local_job_id: int, artifact: str, expires: int, signature: str) -> FileResponse:
+    if not DEPTH_ARTIFACT_SECRET:
+        raise HTTPException(status_code=503, detail="深度视频签名服务未配置")
+    if expires < int(utc_now().timestamp()):
+        raise HTTPException(status_code=410, detail="深度视频访问地址已过期")
+    with connect() as db:
+        row = db.execute("SELECT * FROM depth_jobs WHERE id=?", (local_job_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="深度任务不存在")
+    expected = depth_artifact_signature(row, artifact, expires)
+    if not hmac.compare_digest(signature, expected):
+        raise HTTPException(status_code=403, detail="深度视频访问地址无效")
+    expiration = depth_result_expiration(row)
+    if not expiration or expires > int(expiration.timestamp()):
+        raise HTTPException(status_code=403, detail="深度视频访问地址无效")
+    return serve_depth_artifact(row, artifact)
+
+
+@commercial_router.get("/depth/jobs/{local_job_id}/{artifact}")
+async def depth_job_artifact(local_job_id: int, artifact: str, user: dict[str, Any] = Depends(current_user)) -> FileResponse:
+    await get_depth_job(local_job_id, user)
+    with connect() as db:
+        row = db.execute("SELECT * FROM depth_jobs WHERE id=? AND user_id=?", (local_job_id, user["id"])).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="深度任务不存在")
+    return serve_depth_artifact(row, artifact)
 
 
 def job_payload(row: sqlite3.Row) -> dict[str, Any]:

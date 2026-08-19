@@ -131,7 +131,7 @@ def save_analysis(mode: str, filename: str, analysis: VisualAnalysis, prompts: P
         return int(cursor.lastrowid)
 
 
-def make_prompts(analysis: VisualAnalysis) -> PromptBundle:
+def make_prompts(analysis: VisualAnalysis, video_prompt: bool = False) -> PromptBundle:
     details = ", ".join(analysis.details) or "highly resolved natural textures"
     negative = ", ".join(analysis.negative_prompt) or "text, logo, watermark, artifacts"
     universal = analysis.prompt_zh or f"{analysis.subject}。{analysis.scene}。{analysis.composition}。{analysis.camera}。{analysis.lighting}。{analysis.color}。{analysis.style}。细节：{details}。"
@@ -139,7 +139,7 @@ def make_prompts(analysis: VisualAnalysis) -> PromptBundle:
     midjourney = f"{analysis.subject}, {analysis.scene}, {analysis.composition}, {analysis.camera}, {analysis.lighting}, {analysis.style}, {details} --ar 4:5 --stylize 180 --no {negative}"
     flux = f"A cinematic editorial image of {analysis.subject}, in {analysis.scene}. {analysis.composition}. {analysis.camera}. {analysis.lighting}. Color palette: {analysis.color}. Style: {analysis.style}. Details: {details}. Avoid {negative}."
     timeline = " ".join(f"{item.start}-{item.end}: {item.description}; camera: {item.camera_motion}; subject: {item.subject_motion}." for item in analysis.timeline)
-    video = universal if analysis.prompt_zh else f"{analysis.subject}. {analysis.scene}. {analysis.composition}. {analysis.camera}. {analysis.lighting}. Preserve identity, wardrobe and spatial continuity. {timeline} 24fps, realistic motion blur, cinematic pacing. Avoid {negative}."
+    video = analysis.prompt_zh if video_prompt and analysis.prompt_zh else f"{analysis.subject}. {analysis.scene}. {analysis.composition}. {analysis.camera}. {analysis.lighting}. Preserve identity, wardrobe and spatial continuity. {timeline} 24fps, realistic motion blur, cinematic pacing. Avoid {negative}."
     return PromptBundle(universal=universal, midjourney=midjourney, flux=flux, video=video, chinese=universal, english=english)
 
 
@@ -195,6 +195,15 @@ async def call_vision(images: list[tuple[bytes, str, str]], analysis_depth: str 
             "prompt_zh 必须是可直接用于视频生成模型的完整中文 10 秒提示词，明确首帧、时间推进、镜头语言、运动节奏、"
             "物理一致性和结尾状态；prompt_en 必须是语义一致、自然专业的完整英文 10-second video prompt。"
             "两种提示词都必须明确写出时长 10 秒。"
+        )
+    elif analysis_task == "video_reconstruct":
+        task_guidance = (
+            "当前任务是反推输入视频本身的视频生成提示词，目标是让视频生成模型尽可能复现原视频，而不是只描述某一帧。"
+            "timeline 必须按输入关键帧时间覆盖完整视频过程，逐段还原主体动作、表情变化、物体运动、镜头运动、景别变化、"
+            "环境动态、光影变化、节奏和结尾状态。subject、scene、composition、camera、lighting、color、style 和 details "
+            "描述贯穿全片且稳定的视觉条件。prompt_zh 必须采用画面拓展视频提示词的完整格式，包含首帧设定、连续时间推进、"
+            "逐段动作、镜头语言、运动速度、物理连续性和最终画面，可直接提交视频生成模型；prompt_en 必须提供语义一致的专业英文版本。"
+            "必须复现观察到的内容，不得改写成静态图片提示词，不得擅自增加原视频没有的人物、动作、场景或剧情。"
         )
     else:
         task_guidance = (
@@ -399,8 +408,8 @@ async def analyze_media_upload(file: UploadFile, mode: str, check_content_securi
             frames = video_frames(temp.name, duration)
             if check_content_security:
                 await check_images(frames)
-            analysis = await call_vision(frames, analysis_depth, "reconstruct")
-    prompts = make_prompts(analysis)
+            analysis = await call_vision(frames, analysis_depth, "video_reconstruct")
+    prompts = make_prompts(analysis, video_prompt=mode == "video" or analysis_task == "image_expand_video")
     return analysis, prompts
 
 

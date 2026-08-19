@@ -7,6 +7,7 @@ Type=simple
 User=root
 WorkingDirectory=/opt/prompt-lens
 EnvironmentFile=/opt/prompt-lens/.env
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/prompt-lens/.playwright-browsers
 ExecStart=/opt/prompt-lens/.venv/bin/uvicorn app.main:app --host ${APP_HOST} --port ${APP_PORT}
 Restart=always
 RestartSec=5
