@@ -1,12 +1,45 @@
 const { api, uploadDepthJob, downloadAuthenticated } = require("../../utils/api");
+const { AD_UNIT_ID } = require("../../config");
 const { ensurePrivacyAuthorized } = require("../../utils/privacy");
 Page({
-  data: { sourceMode: "upload", filePath: "", fileName: "", videoLink: "", preset: "standard_depth", computeCount: 0, job: null, submitting: false }, timer: null, active: true,
-  async onShow() { this.active = true; try { const user = await getApp().ensureLogin(); this.setData({ computeCount: user.compute_count ?? user.credits ?? 0 }); } catch (error) { wx.showToast({ title: error.message, icon: "none" }); } },
-  onUnload() { this.active = false; if (this.timer) clearTimeout(this.timer); },
+  data: { sourceMode: "upload", filePath: "", fileName: "", videoLink: "", preset: "standard_depth", computeCount: 0, adReward: 1, adRemaining: 20, job: null, submitting: false, adLoading: false }, timer: null, active: true, rewardAd: null,
+  onLoad() {
+    this.active = true;
+    if (AD_UNIT_ID && wx.createRewardedVideoAd) {
+      this.rewardAd = wx.createRewardedVideoAd({ adUnitId: AD_UNIT_ID });
+    }
+  },
+  async onShow() { this.active = true; try { const user = await getApp().ensureLogin(); this.setData({ computeCount: user.compute_count ?? user.credits ?? 0, adReward: user.ad?.reward || 1, adRemaining: user.ad?.remaining_today ?? user.ad?.daily_limit ?? 20 }); } catch (error) { wx.showToast({ title: error.message, icon: "none" }); } },
+  onUnload() {
+    this.active = false;
+    if (this.timer) clearTimeout(this.timer);
+  },
   chooseSource(event) { this.setData({ sourceMode: event.currentTarget.dataset.source, filePath: "", fileName: "", videoLink: "", job: null }); },
   choosePreset(event) { this.setData({ preset: event.currentTarget.dataset.preset }); },
   onLinkInput(event) { this.setData({ videoLink: event.detail.value }); },
+  async watchRewardAd() {
+    if (!this.rewardAd) return wx.showToast({ title: "激励广告尚未配置", icon: "none" });
+    if (this.data.adRemaining <= 0) return wx.showToast({ title: "今日奖励次数已用完", icon: "none" });
+    this.setData({ adLoading: true });
+    try {
+      const prepared = await api("/api/v1/rewards/ad/prepare", { method: "POST" });
+      const ended = await new Promise(async (resolve, reject) => {
+        const handler = (event) => { this.rewardAd.offClose(handler); resolve(event?.isEnded); };
+        this.rewardAd.onClose(handler);
+        try { await this.rewardAd.show(); } catch (_) {
+          try { await this.rewardAd.load(); await this.rewardAd.show(); } catch (error) { this.rewardAd.offClose(handler); reject(error); }
+        }
+      });
+      if (!ended) return wx.showToast({ title: "完整观看后才能获得次数", icon: "none" });
+      const result = await api("/api/v1/rewards/ad/complete", { method: "POST", data: { claim_token: prepared.claim_token } });
+      if (this.active) this.setData({ computeCount: result.compute_count ?? result.credits, adRemaining: Math.max(0, this.data.adRemaining - 1) });
+      wx.showToast({ title: "+" + result.rewarded + " 次算力" });
+    } catch (error) {
+      wx.showToast({ title: error.message || "领取失败", icon: "none" });
+    } finally {
+      if (this.active) this.setData({ adLoading: false });
+    }
+  },
   async chooseVideo() { if (!(await ensurePrivacyAuthorized())) return; wx.chooseMedia({ count: 1, mediaType: ["video"], sourceType: ["album", "camera"], maxDuration: 300, success: ({ tempFiles }) => { const file = tempFiles[0]; if (!file) return; if (file.size > 500 * 1024 * 1024) return wx.showToast({ title: "视频不能超过 500MB", icon: "none" }); this.setData({ filePath: file.tempFilePath, fileName: file.tempFilePath.split("/").pop() }); } }); },
   async submit() {
     if (this.data.computeCount < 1) return wx.showToast({ title: "算力次数不足", icon: "none" });

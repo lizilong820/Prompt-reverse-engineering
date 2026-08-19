@@ -1,6 +1,6 @@
 <view class="page tools-page">
   <view class="topline"><view class="brand"><view class="brand-mark">D/</view><view><text class="brand-name">视频深度转换</text><text class="brand-sub">动作深度视频工作台</text></view></view></view>
-  <view class="balance-card"><view><text class="balance-label">可用算力次数</text><text class="balance-number">{{computeCount}}</text></view><text class="tool-credit-note">每次转换 1 次算力</text></view>
+  <view class="balance-card"><view><text class="balance-label">可用算力次数</text><text class="balance-number">{{computeCount}}</text></view><button class="reward-button" bindtap="watchRewardAd" disabled="{{adLoading || adRemaining <= 0}}"><text wx:if="{{adRemaining > 0}}" class="reward-plus">🎬</text>{{adRemaining > 0 ? '看激励广告+1次' : '今日已领完'}}</button></view>
   <view class="heading"><text class="eyebrow">DEPTH MOTION</text><view class="section-title">深度转换</view></view>
   <view class="tool-mode"><text>深度视频</text><text>DEPTH VIDEO · 1 次</text></view>
   <view class="source-switch"><view class="source-item {{sourceMode === 'upload' ? 'active' : ''}}" data-source="upload" bindtap="chooseSource">本地上传</view><view class="source-item {{sourceMode === 'link' ? 'active' : ''}}" data-source="link" bindtap="chooseSource">粘贴链接</view></view>
