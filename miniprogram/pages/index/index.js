@@ -3,7 +3,7 @@ const { AD_UNIT_ID } = require("../../config");
 const { ensurePrivacyAuthorized } = require("../../utils/privacy");
 
 Page({
-  data: { mode: "image", sourceMode: "upload", computeCount: 0, adReward: 1, adRemaining: 20, filePath: "", fileName: "", fileSize: "", videoLink: "", submitting: false, progress: 0, adLoading: false },
+  data: { mode: "image", imageTask: "reconstruct", sourceMode: "upload", computeCount: 0, adReward: 1, adRemaining: 20, filePath: "", fileName: "", fileSize: "", videoLink: "", submitting: false, progress: 0, adLoading: false },
   rewardAd: null,
   active: true,
   onLoad() {
@@ -19,6 +19,7 @@ Page({
   async onShow() { try { const user = await getApp().ensureLogin(); if (this.active) this.syncUser(user); } catch (error) { wx.showToast({ title: error.message, icon: "none" }); } },
   syncUser(user) { this.setData({ computeCount: user.compute_count ?? user.credits ?? 0, adReward: user.ad?.reward || 1, adRemaining: user.ad?.remaining_today ?? user.ad?.daily_limit ?? 20 }); },
   switchMode(event) { this.setData({ mode: event.currentTarget.dataset.mode, sourceMode: "upload", filePath: "", fileName: "", fileSize: "", videoLink: "" }); },
+  switchImageTask(event) { this.setData({ imageTask: event.currentTarget.dataset.task, filePath: "", fileName: "", fileSize: "" }); },
   switchSource(event) { this.setData({ sourceMode: event.currentTarget.dataset.source, filePath: "", fileName: "", fileSize: "" }); },
   onVideoLinkInput(event) { this.setData({ videoLink: event.detail.value }); },
   async chooseMedia() {
@@ -47,7 +48,8 @@ Page({
     this.setData({ submitting: true, progress: usingLink ? 5 : 0 });
     onUploadProgress((progress) => { if (this.active) this.setData({ progress }); });
     try {
-      const job = usingLink ? await api("/api/v1/jobs/remote", { method: "POST", data: { url: this.data.videoLink.trim(), analysis_depth: "detailed", idempotency_key: idempotencyKey } }) : await uploadJob(this.data.filePath, this.data.mode, idempotencyKey, "detailed");
+      const analysisTask = this.data.mode === "image" ? this.data.imageTask : "reconstruct";
+      const job = usingLink ? await api("/api/v1/jobs/remote", { method: "POST", data: { url: this.data.videoLink.trim(), analysis_depth: "detailed", idempotency_key: idempotencyKey } }) : await uploadJob(this.data.filePath, this.data.mode, idempotencyKey, "detailed", analysisTask);
       await getApp().refreshMe(); wx.navigateTo({ url: "/pages/result/result?id=" + job.id });
     } catch (error) { await getApp().refreshMe().then((user) => { if (this.active) this.syncUser(user); }).catch(() => {}); wx.showModal({ title: error.stage === "upload" ? "上传失败" : "提交失败", content: error.message || "任务未提交，未消耗算力次数", showCancel: false }); } finally { onUploadProgress(); if (this.active) this.setData({ submitting: false }); }
   }

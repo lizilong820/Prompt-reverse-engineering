@@ -18,7 +18,7 @@ Page({
           ...job,
           recordKey: "analysis-" + job.id,
           recordType: "analysis",
-          title: job.mode === "video" ? "视频反推" : "图片反推",
+          title: job.analysis_task === "image_expand_video" ? "画面拓展" : job.mode === "video" ? "视频反推" : "图片反推",
           statusText: analysisLabels[job.status] || job.status,
           createdText: new Date(job.created_at).toLocaleString()
         })),

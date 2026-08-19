@@ -46,6 +46,7 @@ DEPTH_COMPUTE_COST = int(os.getenv("DEPTH_COMPUTE_COST", "1"))
 DEPTH_SERVICE_BASE_URL = os.getenv("DEPTH_SERVICE_BASE_URL", "https://depth.whaios.com").rstrip("/")
 DB_PATH = Path(DATA_DIR) / "commercial.sqlite3"
 ANALYSIS_DEPTHS = {"standard", "detailed", "professional"}
+ANALYSIS_TASKS = {"reconstruct", "image_expand_video"}
 DEPTH_PRESETS = {"quick_preview", "standard_depth", "motion_character"}
 
 commercial_router = APIRouter(prefix="/api/v1", tags=["mini-program"])
@@ -132,6 +133,7 @@ def connect() -> sqlite3.Connection:
             idempotency_key TEXT NOT NULL,
             result_json TEXT,
             error_message TEXT,
+            analysis_task TEXT NOT NULL DEFAULT 'reconstruct',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             UNIQUE(user_id, idempotency_key)
@@ -165,6 +167,7 @@ def connect() -> sqlite3.Connection:
         "ALTER TABLE jobs ADD COLUMN source_type TEXT NOT NULL DEFAULT 'upload'",
         "ALTER TABLE jobs ADD COLUMN source_url TEXT",
         "ALTER TABLE jobs ADD COLUMN source_platform TEXT",
+        "ALTER TABLE jobs ADD COLUMN analysis_task TEXT NOT NULL DEFAULT 'reconstruct'",
     ):
         try:
             db.execute(statement)
@@ -313,15 +316,15 @@ def fail_analysis_job(job_id: int, user_id: int, cost: int, message: str) -> Non
         db.commit()
 
 
-async def process_job(job_id: int, user_id: int, media_path: Path, filename: str, content_type: str, mode: str, cost: int, analysis_depth: str) -> None:
+async def process_job(job_id: int, user_id: int, media_path: Path, filename: str, content_type: str, mode: str, cost: int, analysis_depth: str, analysis_task: str) -> None:
     try:
         # 延迟导入，避免 app.main 注册 commercial_router 时形成循环依赖。
         from app.main import analyze_media_upload
 
         with media_path.open("rb") as source:
             upload = UploadFile(file=source, filename=filename, headers=Headers({"content-type": content_type}))
-            analysis, prompts = await analyze_media_upload(upload, mode, check_content_security=True, analysis_depth=analysis_depth)
-        result = json.dumps({"analysis": analysis.model_dump(), "prompts": prompts.model_dump(), "analysis_depth": analysis_depth}, ensure_ascii=False)
+            analysis, prompts = await analyze_media_upload(upload, mode, check_content_security=True, analysis_depth=analysis_depth, analysis_task=analysis_task)
+        result = json.dumps({"analysis": analysis.model_dump(), "prompts": prompts.model_dump(), "analysis_depth": analysis_depth, "analysis_task": analysis_task}, ensure_ascii=False)
         with connect() as db:
             db.execute("UPDATE jobs SET status='succeeded', result_json=?, updated_at=? WHERE id=?", (result, utc_now().isoformat(), job_id))
     except Exception as exc:
@@ -353,7 +356,7 @@ async def process_remote_analysis_job(job_id: int, user_id: int, raw_url: str, c
             filename, media_path, source_platform = downloaded.filename, directory / f"source{downloaded.suffix}", "direct"
         with connect() as db:
             db.execute("UPDATE jobs SET filename=?,source_platform=?,updated_at=? WHERE id=?", (filename, source_platform, utc_now().isoformat(), job_id))
-        await process_job(job_id, user_id, media_path, filename, remote_video_content_type(media_path), "video", cost, analysis_depth)
+        await process_job(job_id, user_id, media_path, filename, remote_video_content_type(media_path), "video", cost, analysis_depth, "reconstruct")
     except InvalidUploadError as exc:
         logger.warning("Remote analysis download failed: job_id=%s detail=%s", job_id, exc)
         fail_analysis_job(job_id, user_id, cost, str(exc))
@@ -390,13 +393,17 @@ async def persist_job_media(file: UploadFile, mode: str, idempotency_key: str, d
 
 
 @commercial_router.post("/jobs", status_code=202)
-async def create_job(background_tasks: BackgroundTasks, file: UploadFile = File(...), mode: str = Form("image"), analysis_depth: str = Form("detailed"), idempotency_key: str = Form(...), user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+async def create_job(background_tasks: BackgroundTasks, file: UploadFile = File(...), mode: str = Form("image"), analysis_depth: str = Form("detailed"), analysis_task: str = Form("reconstruct"), idempotency_key: str = Form(...), user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     if len(idempotency_key) < 12 or len(idempotency_key) > 128:
         raise HTTPException(status_code=400, detail="幂等键格式错误")
     if mode not in {"image", "video"}:
         raise HTTPException(status_code=400, detail="不支持的媒体类型")
     if analysis_depth not in ANALYSIS_DEPTHS:
         raise HTTPException(status_code=400, detail="不支持的反推维度")
+    if analysis_task not in ANALYSIS_TASKS:
+        raise HTTPException(status_code=400, detail="不支持的图片任务类型")
+    if analysis_task == "image_expand_video" and mode != "image":
+        raise HTTPException(status_code=400, detail="画面拓展仅支持图片")
     cost = IMAGE_CREDIT_COST if mode == "image" else VIDEO_CREDIT_COST
     media_path, content_type = await persist_job_media(file, mode, idempotency_key)
     now = utc_now().isoformat()
@@ -408,14 +415,14 @@ async def create_job(background_tasks: BackgroundTasks, file: UploadFile = File(
                 db.rollback()
                 media_path.unlink(missing_ok=True)
                 return job_payload(existing)
-            cursor = db.execute("INSERT INTO jobs(user_id,mode,filename,cost,status,idempotency_key,analysis_depth,source_type,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)", (user["id"], mode, file.filename or "untitled", cost, "processing", idempotency_key, analysis_depth, "upload", now, now))
+            cursor = db.execute("INSERT INTO jobs(user_id,mode,filename,cost,status,idempotency_key,analysis_depth,analysis_task,source_type,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)", (user["id"], mode, file.filename or "untitled", cost, "processing", idempotency_key, analysis_depth, analysis_task, "upload", now, now))
             job_id = int(cursor.lastrowid)
             change_credits(db, user["id"], -cost, "analysis_job", "job", str(job_id), f"job:charge:{job_id}")
             db.commit()
     except Exception:
         media_path.unlink(missing_ok=True)
         raise
-    background_tasks.add_task(process_job, job_id, user["id"], media_path, file.filename or "untitled", content_type, mode, cost, analysis_depth)
+    background_tasks.add_task(process_job, job_id, user["id"], media_path, file.filename or "untitled", content_type, mode, cost, analysis_depth, analysis_task)
     with connect() as db:
         row = db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
     return job_payload(row)
@@ -630,7 +637,7 @@ async def depth_job_artifact(local_job_id: int, artifact: str, user: dict[str, A
 def job_payload(row: sqlite3.Row) -> dict[str, Any]:
     result = json.loads(row["result_json"]) if row["result_json"] else None
     keys = set(row.keys())
-    return {"id": row["id"], "mode": row["mode"], "filename": row["filename"], "cost": row["cost"], "status": row["status"], "result": result, "error_message": row["error_message"], "analysis_depth": row["analysis_depth"] if "analysis_depth" in keys else "detailed", "source_type": row["source_type"] if "source_type" in keys else "upload", "source_platform": row["source_platform"] if "source_platform" in keys else None, "created_at": row["created_at"]}
+    return {"id": row["id"], "mode": row["mode"], "filename": row["filename"], "cost": row["cost"], "status": row["status"], "result": result, "error_message": row["error_message"], "analysis_depth": row["analysis_depth"] if "analysis_depth" in keys else "detailed", "analysis_task": row["analysis_task"] if "analysis_task" in keys else "reconstruct", "source_type": row["source_type"] if "source_type" in keys else "upload", "source_platform": row["source_platform"] if "source_platform" in keys else None, "created_at": row["created_at"]}
 
 
 @commercial_router.get("/jobs")

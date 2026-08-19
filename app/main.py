@@ -165,7 +165,20 @@ def parse_vision_payload(payload: dict[str, Any]) -> VisualAnalysis:
         raise HTTPException(status_code=502, detail="Vision API 返回了无法解析的结构化结果") from exc
 
 
-async def call_vision(images: list[tuple[bytes, str, str]], analysis_depth: str = "detailed") -> VisualAnalysis:
+def enforce_image_expansion_duration(analysis: VisualAnalysis) -> VisualAnalysis:
+    prompt_zh = analysis.prompt_zh.strip()
+    prompt_en = analysis.prompt_en.strip()
+    if "10秒" not in prompt_zh:
+        analysis.prompt_zh = f"10秒视频。{prompt_zh}" if prompt_zh else "10秒视频。"
+    if "10-second" not in prompt_en.lower() and "10 second" not in prompt_en.lower():
+        analysis.prompt_en = f"10-second video. {prompt_en}" if prompt_en else "10-second video."
+    if analysis.timeline:
+        analysis.timeline[0].start = "00:00"
+        analysis.timeline[-1].end = "00:10"
+    return analysis
+
+
+async def call_vision(images: list[tuple[bytes, str, str]], analysis_depth: str = "detailed", analysis_task: str = "reconstruct") -> VisualAnalysis:
     if not OPENAI_API_KEY:
         raise HTTPException(status_code=503, detail="服务尚未配置 OPENAI_API_KEY，无法进行真实分析")
     depth_guidance = {
@@ -173,14 +186,28 @@ async def call_vision(images: list[tuple[bytes, str, str]], analysis_depth: str 
         "detailed": "详细维度：在标准维度基础上补充材质、纹理、空间层次、环境细节、氛围、动作和负面约束。",
         "professional": "专业维度：完整描述镜头焦段、景别、机位、透视、布光方式、色彩管理、材质、后期质感、运动连续性、生成控制参数和负面约束。",
     }.get(analysis_depth, "详细维度：充分描述可见画面及生成控制细节。")
+    if analysis_task == "image_expand_video":
+        task_guidance = (
+            "当前任务是将单张图片拓展为严格 10 秒的视频生成提示词。"
+            "subject、scene、composition、camera、lighting、color、style 和 details 先准确描述首帧可见内容；"
+            "timeline 必须覆盖完整 00:00-00:10，按连续时间段描述主体动作、镜头运动、环境动态和结尾画面，"
+            "动作应自然可实现，保持主体身份、外观、服装、场景空间、光线和色彩连续，不得无故新增主要人物或改变场景。"
+            "prompt_zh 必须是可直接用于视频生成模型的完整中文 10 秒提示词，明确首帧、时间推进、镜头语言、运动节奏、"
+            "物理一致性和结尾状态；prompt_en 必须是语义一致、自然专业的完整英文 10-second video prompt。"
+            "两种提示词都必须明确写出时长 10 秒。"
+        )
+    else:
+        task_guidance = (
+            "只描述可见事实，不猜测品牌和身份。视频关键帧需要填写 timeline；"
+            "单张图片的 timeline 返回空数组。"
+        )
     instructions = (
         "分析输入媒体，只返回 JSON，不要 Markdown。必须完整包含且不得省略这些字段："
         "subject、scene、composition、camera、lighting、color、style、details、negative_prompt、confidence、timeline、prompt_zh、prompt_en。"
         "前七项是简洁中文字符串；details 和 negative_prompt 是字符串数组；confidence 是 0 到 100 的整数；"
         "timeline 是对象数组，每项必须包含 start、end、description、camera_motion、subject_motion。"
         "prompt_zh 是可直接用于生成模型的完整中文提示词，prompt_en 是语义一致且自然专业的完整英文提示词，不得简单拼音化。"
-        "只描述可见事实，不猜测品牌和身份。视频关键帧需要填写 timeline；单张图片的 timeline 返回空数组。"
-        f"{depth_guidance}即使画面简单也必须填写全部字段。"
+        f"{task_guidance}{depth_guidance}即使画面简单也必须填写全部字段。"
     )
     content: list[dict[str, Any]] = [{"type": "text", "text": instructions}]
     for data, content_type, label in images:
@@ -211,7 +238,8 @@ async def call_vision(images: list[tuple[bytes, str, str]], analysis_depth: str 
                     raise HTTPException(status_code=502, detail="Vision API 请求失败，请检查模型、额度和 API key")
                 continue
             try:
-                return parse_vision_payload(response.json())
+                analysis = parse_vision_payload(response.json())
+                return enforce_image_expansion_duration(analysis) if analysis_task == "image_expand_video" else analysis
             except HTTPException:
                 if attempt == len(formats):
                     raise
@@ -332,11 +360,15 @@ async def history_detail(analysis_id: int) -> AnalysisResponse:
     return AnalysisResponse(id=row["id"], created_at=row["created_at"], mode=row["mode"], source="history", filename=row["filename"], analysis=payload["analysis"], prompts=payload["prompts"], note="已从服务器历史记录恢复")
 
 
-async def analyze_media_upload(file: UploadFile, mode: str, check_content_security: bool = False, analysis_depth: str = "detailed") -> tuple[VisualAnalysis, PromptBundle]:
+async def analyze_media_upload(file: UploadFile, mode: str, check_content_security: bool = False, analysis_depth: str = "detailed", analysis_task: str = "reconstruct") -> tuple[VisualAnalysis, PromptBundle]:
     if mode not in {"image", "video"}:
         raise HTTPException(status_code=400, detail="不支持的媒体类型")
     if analysis_depth not in {"standard", "detailed", "professional"}:
         raise HTTPException(status_code=400, detail="不支持的反推维度")
+    if analysis_task not in {"reconstruct", "image_expand_video"}:
+        raise HTTPException(status_code=400, detail="不支持的图片任务类型")
+    if analysis_task == "image_expand_video" and mode != "image":
+        raise HTTPException(status_code=400, detail="画面拓展仅支持图片")
     allowed_types = IMAGE_TYPES if mode == "image" else VIDEO_TYPES
     max_bytes = MAX_IMAGE_BYTES if mode == "image" else MAX_VIDEO_BYTES
     if file.content_type not in allowed_types:
@@ -350,7 +382,7 @@ async def analyze_media_upload(file: UploadFile, mode: str, check_content_securi
         images = [(content, file.content_type, file.filename or "image")]
         if check_content_security:
             await check_images(images)
-        analysis = await call_vision(images, analysis_depth)
+        analysis = await call_vision(images, analysis_depth, analysis_task)
     else:
         suffix = Path(file.filename or "video.mp4").suffix or ".mp4"
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as temp:
@@ -367,7 +399,7 @@ async def analyze_media_upload(file: UploadFile, mode: str, check_content_securi
             frames = video_frames(temp.name, duration)
             if check_content_security:
                 await check_images(frames)
-            analysis = await call_vision(frames, analysis_depth)
+            analysis = await call_vision(frames, analysis_depth, "reconstruct")
     prompts = make_prompts(analysis)
     return analysis, prompts
 

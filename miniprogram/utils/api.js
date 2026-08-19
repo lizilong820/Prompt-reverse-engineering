@@ -46,8 +46,8 @@ function uploadFileTask(path, filePath, formData) {
   });
 }
 
-function uploadJob(filePath, mode, idempotencyKey, analysisDepth = "detailed") {
-  return uploadFileTask("/api/v1/jobs", filePath, { mode, analysis_depth: analysisDepth, idempotency_key: idempotencyKey });
+function uploadJob(filePath, mode, idempotencyKey, analysisDepth = "detailed", analysisTask = "reconstruct") {
+  return uploadFileTask("/api/v1/jobs", filePath, { mode, analysis_depth: analysisDepth, analysis_task: analysisTask, idempotency_key: idempotencyKey });
 }
 
 function uploadDepthJob(filePath, preset, idempotencyKey) {
