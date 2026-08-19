@@ -1,5 +1,5 @@
 <view class="page tools-page">
-  <view class="topline"><view class="brand"><view class="brand-mark">D/</view><view><text class="brand-name">视频深度转换</text><text class="brand-sub">动作深度视频工作台</text></view></view><view class="avatar-dot">{{computeCount}}</view></view>
+  <view class="topline"><view class="brand"><view class="brand-mark">D/</view><view><text class="brand-name">视频深度转换</text><text class="brand-sub">动作深度视频工作台</text></view></view></view>
   <view class="balance-card"><view><text class="balance-label">可用算力次数</text><text class="balance-number">{{computeCount}}</text></view><text class="tool-credit-note">每次转换 1 次算力</text></view>
   <view class="heading"><text class="eyebrow">DEPTH MOTION</text><view class="section-title">深度转换</view></view>
   <view class="tool-mode"><text>深度视频</text><text>DEPTH VIDEO · 1 次</text></view>
