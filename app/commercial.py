@@ -610,12 +610,45 @@ def cleanup_expired_depth_results() -> None:
             db.execute("UPDATE depth_jobs SET artifact_path=NULL,artifact_content_type=NULL WHERE id=?", (row["id"],))
 
 
+async def enhance_motion_depth_video(source_path: Path, output_path: Path) -> None:
+    """Emphasize foreground separation and body contours for motion-control workflows."""
+    try:
+        from imageio_ffmpeg import get_ffmpeg_exe
+
+        ffmpeg = get_ffmpeg_exe()
+    except Exception:
+        ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("服务器缺少 FFmpeg，无法生成人物动作深度视频")
+    process = await asyncio.create_subprocess_exec(
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+        "-i", str(source_path),
+        "-map", "0:v:0", "-map", "0:a?",
+        "-vf", "eq=contrast=1.22:gamma=0.82,unsharp=5:5:0.85:3:3:0",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "17",
+        "-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart",
+        str(output_path),
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await process.communicate()
+    if process.returncode != 0:
+        detail = stderr.decode("utf-8", "replace").strip().splitlines()
+        raise RuntimeError(detail[-1] if detail else "人物动作深度增强失败")
+
+
 async def cache_depth_result(local_job_id: int, external_id: str) -> None:
     DEPTH_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     temporary_path = DEPTH_RESULTS_DIR / f".{local_job_id}-{secrets.token_hex(6)}.part"
+    processed_path = DEPTH_RESULTS_DIR / f".{local_job_id}-{secrets.token_hex(6)}.processed.mp4"
     content_type = "video/mp4"
     suffix = ".mp4"
     try:
+        with connect() as db:
+            row = db.execute("SELECT preset FROM depth_jobs WHERE id=?", (local_job_id,)).fetchone()
+        if not row:
+            raise RuntimeError("深度任务不存在")
+        preset = row["preset"]
         timeout = httpx.Timeout(None, connect=10.0)
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             async with client.stream("GET", f"{DEPTH_SERVICE_BASE_URL}/api/jobs/{external_id}/download") as response:
@@ -628,6 +661,12 @@ async def cache_depth_result(local_job_id: int, external_id: str) -> None:
                         target.write(chunk)
         if not temporary_path.exists() or temporary_path.stat().st_size == 0:
             raise RuntimeError("深度服务返回了空视频")
+        if preset == "motion_character":
+            await enhance_motion_depth_video(temporary_path, processed_path)
+            temporary_path.unlink(missing_ok=True)
+            temporary_path = processed_path
+            content_type = "video/mp4"
+            suffix = ".mp4"
         final_path = DEPTH_RESULTS_DIR / f"depth-{local_job_id}{suffix}"
         temporary_path.replace(final_path)
         now = utc_now()
@@ -642,6 +681,7 @@ async def cache_depth_result(local_job_id: int, external_id: str) -> None:
                 raise RuntimeError("深度任务不存在")
     except Exception:
         temporary_path.unlink(missing_ok=True)
+        processed_path.unlink(missing_ok=True)
         raise
 
 
