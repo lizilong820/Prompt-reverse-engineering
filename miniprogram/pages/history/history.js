@@ -12,7 +12,7 @@ Page({
         api("/api/v1/depth/jobs")
       ]);
       const analysisLabels = { succeeded: "已完成", failed: "已返还", processing: "分析中" };
-      const depthLabels = { completed: "已完成", failed: "已返还", submitting: "提交中", queued: "等待中", downloading: "下载中", loading_model: "加载模型", processing: "处理中", encoding: "编码中" };
+      const depthLabels = { completed: "已完成", expired: "已过期", failed: "已返还", submitting: "提交中", queued: "等待中", downloading: "下载中", loading_model: "加载模型", processing: "处理中", encoding: "编码中", finalizing: "保存结果中" };
       const records = [
         ...jobs.map((job) => ({
           ...job,
@@ -38,7 +38,14 @@ Page({
   },
   openRecord(event) {
     const record = this.data.records.find((item) => String(item.id) === String(event.currentTarget.dataset.id) && item.recordType === event.currentTarget.dataset.type);
-    if (!record || record.recordType !== "analysis") return;
-    wx.navigateTo({ url: "/pages/result/result?id=" + record.id });
+    if (!record) return;
+    if (record.recordType === "analysis" && record.status === "succeeded") {
+      wx.navigateTo({ url: "/pages/result/result?id=" + record.id });
+      return;
+    }
+    if (record.recordType === "depth" && record.status === "completed") {
+      wx.setStorageSync("openDepthJobId", record.id);
+      wx.switchTab({ url: "/pages/tools/tools" });
+    }
   }
 });

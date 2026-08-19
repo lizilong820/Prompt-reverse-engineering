@@ -2,19 +2,33 @@ const { api, uploadDepthJob, downloadAuthenticated } = require("../../utils/api"
 const { AD_UNIT_ID } = require("../../config");
 const { ensurePrivacyAuthorized } = require("../../utils/privacy");
 Page({
-  data: { sourceMode: "upload", filePath: "", fileName: "", videoLink: "", preset: "standard_depth", computeCount: 0, adReward: 1, adRemaining: 20, job: null, submitting: false, adLoading: false }, timer: null, active: true, rewardAd: null,
+  data: { sourceMode: "upload", filePath: "", fileName: "", videoLink: "", preset: "standard_depth", computeCount: 0, adReward: 1, adRemaining: 20, job: null, resultVideoPath: "", previewLoading: false, submitting: false, adLoading: false }, timer: null, active: true, rewardAd: null, currentJobId: null,
   onLoad() {
     this.active = true;
     if (AD_UNIT_ID && wx.createRewardedVideoAd) {
       this.rewardAd = wx.createRewardedVideoAd({ adUnitId: AD_UNIT_ID });
     }
   },
-  async onShow() { this.active = true; try { const user = await getApp().ensureLogin(); this.setData({ computeCount: user.compute_count ?? user.credits ?? 0, adReward: user.ad?.reward || 1, adRemaining: user.ad?.remaining_today ?? user.ad?.daily_limit ?? 20 }); } catch (error) { wx.showToast({ title: error.message, icon: "none" }); } },
+  async onShow() {
+    this.active = true;
+    try {
+      const user = await getApp().ensureLogin();
+      this.setData({ computeCount: user.compute_count ?? user.credits ?? 0, adReward: user.ad?.reward || 1, adRemaining: user.ad?.remaining_today ?? user.ad?.daily_limit ?? 20 });
+      const requestedJobId = wx.getStorageSync("openDepthJobId");
+      if (requestedJobId) {
+        wx.removeStorageSync("openDepthJobId");
+        this.openDepthJob(requestedJobId);
+      }
+    } catch (error) { wx.showToast({ title: error.message, icon: "none" }); }
+  },
   onUnload() {
     this.active = false;
     if (this.timer) clearTimeout(this.timer);
   },
-  chooseSource(event) { this.setData({ sourceMode: event.currentTarget.dataset.source, filePath: "", fileName: "", videoLink: "", job: null }); },
+  chooseSource(event) {
+    this.stopPolling();
+    this.setData({ sourceMode: event.currentTarget.dataset.source, filePath: "", fileName: "", videoLink: "", job: null, resultVideoPath: "", previewLoading: false });
+  },
   choosePreset(event) { this.setData({ preset: event.currentTarget.dataset.preset }); },
   onLinkInput(event) { this.setData({ videoLink: event.detail.value }); },
   async watchRewardAd() {
@@ -45,10 +59,49 @@ Page({
     if (this.data.computeCount < 1) return wx.showToast({ title: "算力次数不足", icon: "none" });
     if (this.data.sourceMode === "upload" && !this.data.filePath) return wx.showToast({ title: "请选择视频", icon: "none" });
     if (this.data.sourceMode === "link" && !this.data.videoLink.trim()) return wx.showToast({ title: "请粘贴视频链接", icon: "none" });
-    const key = Date.now() + "-" + Math.random().toString(36).slice(2) + "-depth"; this.setData({ submitting: true });
+    const key = Date.now() + "-" + Math.random().toString(36).slice(2) + "-depth"; this.stopPolling(); this.setData({ submitting: true, job: null, resultVideoPath: "", previewLoading: false });
     try { const job = this.data.sourceMode === "upload" ? await uploadDepthJob(this.data.filePath, this.data.preset, key) : await api("/api/v1/depth/jobs/remote", { method: "POST", data: { url: this.data.videoLink.trim(), preset: this.data.preset, idempotency_key: key } }); this.setData({ job, computeCount: this.data.computeCount - 1 }); this.poll(job.id); }
     catch (error) { wx.showModal({ title: "提交失败", content: error.message || "任务未提交，未消耗算力次数", showCancel: false }); } finally { this.setData({ submitting: false }); }
   },
-  async poll(id) { try { const job = await api("/api/v1/depth/jobs/" + id); if (!this.active) return; this.setData({ job }); if (["completed", "failed"].includes(job.status)) return; this.timer = setTimeout(() => this.poll(id), 1500); } catch (error) { if (this.active) wx.showToast({ title: error.message, icon: "none" }); } },
-  async download() { try { const path = await downloadAuthenticated("/api/v1/depth/jobs/" + this.data.job.id + "/download"); await new Promise((resolve, reject) => wx.saveVideoToPhotosAlbum({ filePath: path, success: resolve, fail: reject })); wx.showToast({ title: "已保存到相册" }); } catch (error) { wx.showToast({ title: error.errMsg || error.message || "保存失败", icon: "none" }); } }
+  stopPolling() { if (this.timer) clearTimeout(this.timer); this.timer = null; this.currentJobId = null; },
+  openDepthJob(id) {
+    this.stopPolling();
+    this.setData({ job: null, resultVideoPath: "", previewLoading: false });
+    this.poll(id);
+  },
+  decorateJob(job) {
+    return { ...job, expiresText: job.available_until ? new Date(job.available_until).toLocaleString() : "" };
+  },
+  async loadPreview(job) {
+    if (!job.preview_url || this.data.resultVideoPath) return;
+    this.setData({ previewLoading: true });
+    try {
+      const path = await downloadAuthenticated(job.preview_url);
+      if (this.active && this.currentJobId === job.id) this.setData({ resultVideoPath: path });
+    } catch (error) {
+      if (this.active) wx.showToast({ title: error.message || "结果视频加载失败", icon: "none" });
+    } finally {
+      if (this.active && this.currentJobId === job.id) this.setData({ previewLoading: false });
+    }
+  },
+  async poll(id) {
+    this.currentJobId = Number(id);
+    try {
+      const job = this.decorateJob(await api("/api/v1/depth/jobs/" + id));
+      if (!this.active || this.currentJobId !== Number(id)) return;
+      this.setData({ job });
+      if (job.status === "completed") { await this.loadPreview(job); return; }
+      if (["failed", "expired"].includes(job.status)) return;
+      this.timer = setTimeout(() => this.poll(id), 1500);
+    } catch (error) {
+      if (!this.active || this.currentJobId !== Number(id)) return;
+      wx.showToast({ title: error.message || "任务状态读取失败", icon: "none" });
+      this.timer = setTimeout(() => this.poll(id), 3000);
+    }
+  },
+  noop() {},
+  async download() {
+    if (!this.data.job?.download_url || !(await ensurePrivacyAuthorized())) return;
+    try { const path = await downloadAuthenticated(this.data.job.download_url); await new Promise((resolve, reject) => wx.saveVideoToPhotosAlbum({ filePath: path, success: resolve, fail: reject })); wx.showToast({ title: "已保存到相册" }); } catch (error) { wx.showToast({ title: error.errMsg || error.message || "保存失败", icon: "none" }); }
+  }
 });
