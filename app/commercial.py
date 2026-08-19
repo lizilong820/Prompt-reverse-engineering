@@ -852,8 +852,8 @@ async def depth_job_artifact(local_job_id: int, artifact: str, user: dict[str, A
     return serve_depth_artifact(row, artifact)
 
 
-def job_payload(row: sqlite3.Row) -> dict[str, Any]:
-    result = json.loads(row["result_json"]) if row["result_json"] else None
+def job_payload(row: sqlite3.Row, include_result: bool = True) -> dict[str, Any]:
+    result = json.loads(row["result_json"]) if include_result and row["result_json"] else None
     keys = set(row.keys())
     return {"id": row["id"], "mode": row["mode"], "filename": row["filename"], "cost": row["cost"], "status": row["status"], "result": result, "error_message": row["error_message"], "analysis_depth": row["analysis_depth"] if "analysis_depth" in keys else "detailed", "analysis_task": row["analysis_task"] if "analysis_task" in keys else "reconstruct", "source_type": row["source_type"] if "source_type" in keys else "upload", "source_platform": row["source_platform"] if "source_platform" in keys else None, "created_at": row["created_at"]}
 
@@ -862,7 +862,7 @@ def job_payload(row: sqlite3.Row) -> dict[str, Any]:
 async def list_jobs(user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
     with connect() as db:
         rows = db.execute("SELECT * FROM jobs WHERE user_id=? ORDER BY id DESC LIMIT 50", (user["id"],)).fetchall()
-    return [job_payload(row) for row in rows]
+    return [job_payload(row, include_result=False) for row in rows]
 
 
 @commercial_router.get("/jobs/{job_id}")
