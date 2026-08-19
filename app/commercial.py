@@ -54,7 +54,7 @@ DEPTH_PRESETS = {"quick_preview", "standard_depth", "motion_character"}
 DEPTH_PRESET_OPTIONS: dict[str, dict[str, int | float]] = {
     "quick_preview": {"max_output_side": 768, "max_output_fps": 12, "temporal_smoothing": 0.05, "stabilize_range": 0.70},
     "standard_depth": {"max_output_side": 1280, "max_output_fps": 24, "temporal_smoothing": 0.15, "stabilize_range": 0.82},
-    "motion_character": {"max_output_side": 1024, "max_output_fps": 30, "temporal_smoothing": 0.55, "stabilize_range": 0.95},
+    "motion_character": {"max_output_side": 1024, "output_fps": 30, "temporal_smoothing": 0.55, "stabilize_range": 0.95},
 }
 DEPTH_WAIT_TIMEOUT_SECONDS = int(os.getenv("DEPTH_WAIT_TIMEOUT_SECONDS", "1800"))
 DEPTH_WAIT_INTERVAL_SECONDS = int(os.getenv("DEPTH_WAIT_INTERVAL_SECONDS", "8"))
@@ -610,7 +610,35 @@ def cleanup_expired_depth_results() -> None:
             db.execute("UPDATE depth_jobs SET artifact_path=NULL,artifact_content_type=NULL WHERE id=?", (row["id"],))
 
 
-async def enhance_motion_depth_video(source_path: Path, output_path: Path) -> None:
+async def probe_video_file(path: Path) -> dict[str, int | float]:
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        raise RuntimeError("服务器缺少 FFprobe，无法校验人物动作视频")
+    process = await asyncio.create_subprocess_exec(
+        ffprobe, "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height,r_frame_rate,nb_frames:format=duration",
+        "-of", "json", str(path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
+    if process.returncode != 0:
+        detail = stderr.decode("utf-8", "replace").strip()
+        raise RuntimeError(detail or "人物动作视频校验失败")
+    payload = json.loads(stdout)
+    stream = (payload.get("streams") or [{}])[0]
+    numerator, denominator = str(stream.get("r_frame_rate") or "0/1").split("/", 1)
+    fps = float(numerator) / max(float(denominator), 1.0)
+    return {
+        "width": int(stream.get("width") or 0),
+        "height": int(stream.get("height") or 0),
+        "fps": round(fps, 3),
+        "frames": int(stream.get("nb_frames") or 0),
+        "duration": round(float((payload.get("format") or {}).get("duration") or 0), 3),
+    }
+
+
+async def enhance_motion_depth_video(source_path: Path, output_path: Path) -> dict[str, int | float]:
     """Emphasize foreground separation and body contours for motion-control workflows."""
     try:
         from imageio_ffmpeg import get_ffmpeg_exe
@@ -624,7 +652,7 @@ async def enhance_motion_depth_video(source_path: Path, output_path: Path) -> No
         ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
         "-i", str(source_path),
         "-map", "0:v:0", "-map", "0:a?",
-        "-vf", "eq=contrast=1.22:gamma=0.82,unsharp=5:5:0.85:3:3:0",
+        "-vf", "fps=30,eq=contrast=1.22:gamma=0.82,unsharp=5:5:0.85:3:3:0",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "17",
         "-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart",
         str(output_path),
@@ -635,6 +663,7 @@ async def enhance_motion_depth_video(source_path: Path, output_path: Path) -> No
     if process.returncode != 0:
         detail = stderr.decode("utf-8", "replace").strip().splitlines()
         raise RuntimeError(detail[-1] if detail else "人物动作深度增强失败")
+    return await probe_video_file(output_path)
 
 
 async def cache_depth_result(local_job_id: int, external_id: str) -> None:
@@ -643,6 +672,7 @@ async def cache_depth_result(local_job_id: int, external_id: str) -> None:
     processed_path = DEPTH_RESULTS_DIR / f".{local_job_id}-{secrets.token_hex(6)}.processed.mp4"
     content_type = "video/mp4"
     suffix = ".mp4"
+    processed_metadata: dict[str, int | float] | None = None
     try:
         with connect() as db:
             row = db.execute("SELECT preset FROM depth_jobs WHERE id=?", (local_job_id,)).fetchone()
@@ -662,7 +692,7 @@ async def cache_depth_result(local_job_id: int, external_id: str) -> None:
         if not temporary_path.exists() or temporary_path.stat().st_size == 0:
             raise RuntimeError("深度服务返回了空视频")
         if preset == "motion_character":
-            await enhance_motion_depth_video(temporary_path, processed_path)
+            processed_metadata = await enhance_motion_depth_video(temporary_path, processed_path)
             temporary_path.unlink(missing_ok=True)
             temporary_path = processed_path
             content_type = "video/mp4"
@@ -672,9 +702,14 @@ async def cache_depth_result(local_job_id: int, external_id: str) -> None:
         now = utc_now()
         expiration = now + timedelta(hours=DEPTH_RESULT_RETENTION_HOURS)
         with connect() as db:
+            current = db.execute("SELECT result_json FROM depth_jobs WHERE id=?", (local_job_id,)).fetchone()
+            result = json.loads(current["result_json"]) if current and current["result_json"] else {}
+            if processed_metadata:
+                metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+                result["metadata"] = {**metadata, **processed_metadata}
             cursor = db.execute(
-                "UPDATE depth_jobs SET status='completed',artifact_path=?,artifact_content_type=?,artifact_expires_at=?,updated_at=? WHERE id=?",
-                (str(final_path), content_type, expiration.isoformat(), now.isoformat(), local_job_id),
+                "UPDATE depth_jobs SET status='completed',result_json=?,artifact_path=?,artifact_content_type=?,artifact_expires_at=?,updated_at=? WHERE id=?",
+                (json.dumps(result, ensure_ascii=False), str(final_path), content_type, expiration.isoformat(), now.isoformat(), local_job_id),
             )
             if cursor.rowcount != 1:
                 final_path.unlink(missing_ok=True)
@@ -840,7 +875,7 @@ async def get_depth_job(local_job_id: int, user: dict[str, Any] = Depends(curren
             db.execute("UPDATE depth_jobs SET status=?,result_json=?,error_message=?,updated_at=? WHERE id=?", (status, json.dumps(payload, ensure_ascii=False), payload.get("error"), utc_now().isoformat(), local_job_id))
     with connect() as db:
         fresh = db.execute("SELECT * FROM depth_jobs WHERE id=?", (local_job_id,)).fetchone()
-    return depth_job_payload(fresh, payload)
+    return depth_job_payload(fresh, None if status == "completed" else payload)
 
 
 def serve_depth_artifact(row: sqlite3.Row, artifact: str) -> FileResponse:
