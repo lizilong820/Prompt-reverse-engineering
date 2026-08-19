@@ -32,7 +32,9 @@ Page({
   choosePreset(event) {
     const preset = event.currentTarget.dataset.preset;
     if (preset === this.data.preset) return;
-    this.stopPolling();
+    if (this.data.job && !["completed", "failed", "expired"].includes(this.data.job.status)) {
+      return wx.showToast({ title: "当前任务处理中，请等待完成", icon: "none" });
+    }
     this.setData({ preset, job: null, resultVideoPath: "", previewLoading: false });
   },
   onLinkInput(event) { this.setData({ videoLink: event.detail.value }); },
