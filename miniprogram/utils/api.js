@@ -58,13 +58,23 @@ function uploadDiagnosticVideo(diagnosticId, role, filePath) {
   return uploadFileTask(`/api/v1/replication-diagnostics/${diagnosticId}/${role}`, filePath, {});
 }
 
-function downloadAuthenticated(path) {
+function downloadAuthenticated(path, extension = "") {
   return new Promise((resolve, reject) => {
     wx.downloadFile({
       url: API_BASE_URL + path,
       header: { Authorization: "Bearer " + wx.getStorageSync("token") },
       success(response) {
-        if (response.statusCode >= 200 && response.statusCode < 300) return resolve(response.tempFilePath);
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          if (!extension) return resolve(response.tempFilePath);
+          const target = `${wx.env.USER_DATA_PATH}/prompt-lens-${Date.now()}${extension.startsWith(".") ? extension : `.${extension}`}`;
+          wx.getFileSystemManager().copyFile({
+            srcPath: response.tempFilePath,
+            destPath: target,
+            success: () => resolve(target),
+            fail: reject,
+          });
+          return;
+        }
         reject(new Error("视频下载失败"));
       },
       fail: reject

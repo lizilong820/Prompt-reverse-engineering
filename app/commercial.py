@@ -15,7 +15,7 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Header, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from starlette.datastructures import Headers
 from pydantic import BaseModel, Field
 
@@ -53,10 +53,10 @@ DEPTH_RESULTS_DIR = Path(DATA_DIR) / "depth-results"
 ANALYSIS_DEPTHS = {"standard", "detailed", "professional"}
 ANALYSIS_TASKS = {"reconstruct", "image_expand_video"}
 DEPTH_PRESETS = {"quick_preview", "standard_depth", "motion_character"}
-DEPTH_PRESET_OPTIONS: dict[str, dict[str, int | float]] = {
+DEPTH_PRESET_OPTIONS: dict[str, dict[str, int | float | bool]] = {
     "quick_preview": {"max_output_side": 768, "max_output_fps": 12, "temporal_smoothing": 0.05, "stabilize_range": 0.70},
     "standard_depth": {"max_output_side": 1280, "max_output_fps": 24, "temporal_smoothing": 0.15, "stabilize_range": 0.82},
-    "motion_character": {"max_output_side": 1024, "output_fps": 30, "temporal_smoothing": 0.55, "stabilize_range": 0.95},
+    "motion_character": {"max_output_side": 1024, "max_output_fps": 24, "temporal_smoothing": 0.32, "stabilize_range": 0.90},
 }
 DEPTH_WAIT_TIMEOUT_SECONDS = int(os.getenv("DEPTH_WAIT_TIMEOUT_SECONDS", "1800"))
 DEPTH_WAIT_INTERVAL_SECONDS = int(os.getenv("DEPTH_WAIT_INTERVAL_SECONDS", "8"))
@@ -82,6 +82,9 @@ class RemoteAnalysisRequest(BaseModel):
 class DepthRemoteRequest(BaseModel):
     url: str = Field(min_length=8, max_length=4096)
     preset: str = "standard_depth"
+    invert: bool = False
+    aspect_ratio: str = "original"
+    export_frames: bool = False
     idempotency_key: str = Field(min_length=12, max_length=128)
 
 
@@ -93,6 +96,29 @@ class PromptOptimizationRequest(BaseModel):
 
 class DiagnosticCreateRequest(BaseModel):
     idempotency_key: str = Field(min_length=12, max_length=128)
+
+
+class ProjectCreateRequest(BaseModel):
+    job_id: int
+    title: str = Field(min_length=1, max_length=80)
+    note: str = Field(default="", max_length=1000)
+    platform: str = Field(default="universal", max_length=40)
+
+
+class ProjectUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=80)
+    note: str | None = Field(default=None, max_length=1000)
+    is_favorite: bool | None = None
+    recent_platform: str | None = Field(default=None, max_length=40)
+
+
+class ProjectVersionRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=80)
+    platform: str = Field(default="universal", max_length=40)
+    prompt_zh: str = Field(min_length=1, max_length=20000)
+    prompt_en: str = Field(min_length=1, max_length=20000)
+    source_type: str = Field(default="manual", max_length=32)
+    source_id: int | None = None
 
 
 def utc_now() -> datetime:
@@ -211,11 +237,37 @@ def connect() -> sqlite3.Connection:
             updated_at TEXT NOT NULL,
             UNIQUE(user_id, idempotency_key)
         );
+        CREATE TABLE IF NOT EXISTS creative_projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            source_job_id INTEGER REFERENCES jobs(id),
+            title TEXT NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            is_favorite INTEGER NOT NULL DEFAULT 1,
+            recent_platform TEXT NOT NULL DEFAULT 'universal',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(user_id, source_job_id)
+        );
+        CREATE TABLE IF NOT EXISTS project_versions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL REFERENCES creative_projects(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            label TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            prompt_zh TEXT NOT NULL,
+            prompt_en TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            source_id INTEGER,
+            created_at TEXT NOT NULL
+        );
         CREATE INDEX IF NOT EXISTS idx_jobs_user_created ON jobs(user_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_ledger_user_created ON credit_ledger(user_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_depth_jobs_user_created ON depth_jobs(user_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_prompt_optimizations_job_created ON prompt_optimizations(job_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_replication_diagnostics_user_created ON replication_diagnostics(user_id, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_creative_projects_user_updated ON creative_projects(user_id, is_favorite DESC, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_project_versions_project_created ON project_versions(project_id, id DESC);
     """)
     try:
         db.execute("ALTER TABLE users ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0")
@@ -418,6 +470,21 @@ def diagnostic_payload(row: sqlite3.Row) -> dict[str, Any]:
         "error_message": row["error_message"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+    }
+
+
+def project_payload(db: sqlite3.Connection, row: sqlite3.Row, include_versions: bool = False) -> dict[str, Any]:
+    versions = []
+    if include_versions:
+        versions = [dict(item) for item in db.execute(
+            "SELECT id,label,platform,prompt_zh,prompt_en,source_type,source_id,created_at FROM project_versions WHERE project_id=? AND user_id=? ORDER BY id DESC",
+            (row["id"], row["user_id"]),
+        ).fetchall()]
+    version_count = db.execute("SELECT COUNT(*) FROM project_versions WHERE project_id=?", (row["id"],)).fetchone()[0]
+    return {
+        "id": row["id"], "source_job_id": row["source_job_id"], "title": row["title"], "note": row["note"],
+        "is_favorite": bool(row["is_favorite"]), "recent_platform": row["recent_platform"],
+        "version_count": version_count, "versions": versions, "created_at": row["created_at"], "updated_at": row["updated_at"],
     }
 
 
@@ -1287,3 +1354,127 @@ async def credit_ledger(user: dict[str, Any] = Depends(current_user)) -> list[di
     with connect() as db:
         rows = db.execute("SELECT id,amount,balance_after,reason,reference_type,reference_id,created_at FROM credit_ledger WHERE user_id=? ORDER BY id DESC LIMIT 100", (user["id"],)).fetchall()
     return [dict(row) for row in rows]
+
+
+@commercial_router.post("/projects", status_code=201)
+async def create_project(body: ProjectCreateRequest, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    with connect() as db:
+        source = db.execute("SELECT * FROM jobs WHERE id=? AND user_id=? AND status='succeeded'", (body.job_id, user["id"])).fetchone()
+        if not source:
+            raise HTTPException(status_code=404, detail="可收藏的分析结果不存在")
+        existing = db.execute("SELECT * FROM creative_projects WHERE user_id=? AND source_job_id=?", (user["id"], body.job_id)).fetchone()
+        now = utc_now().isoformat()
+        db.execute("BEGIN IMMEDIATE")
+        if existing:
+            db.execute("UPDATE creative_projects SET title=?,note=?,recent_platform=?,is_favorite=1,updated_at=? WHERE id=?", (body.title.strip(), body.note.strip(), body.platform, now, existing["id"]))
+            project_id = existing["id"]
+        else:
+            project_id = db.execute("INSERT INTO creative_projects(user_id,source_job_id,title,note,recent_platform,is_favorite,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", (user["id"], body.job_id, body.title.strip(), body.note.strip(), body.platform, 1, now, now)).lastrowid
+        result = job_payload(source)["result"] or {}
+        prompts = result.get("prompts", {})
+        platforms = prompts.get("platforms") or {}
+        selected = platforms.get(body.platform) or platforms.get("universal")
+        if not selected:
+            # 兼容阶段 5 上线前生成的旧任务，旧结果只有 chinese/english 字段。
+            selected = {
+                "label": "通用",
+                "zh": prompts.get("chinese") or prompts.get("universal") or prompts.get("video") or "",
+                "en": prompts.get("english") or prompts.get("universal") or prompts.get("video") or "",
+            }
+        exists_version = db.execute("SELECT id FROM project_versions WHERE project_id=? AND source_type='job' AND source_id=? AND platform=?", (project_id, body.job_id, body.platform)).fetchone()
+        if not exists_version and selected.get("zh") and selected.get("en"):
+            db.execute("INSERT INTO project_versions(project_id,user_id,label,platform,prompt_zh,prompt_en,source_type,source_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)", (project_id, user["id"], "原始版本", body.platform, selected["zh"], selected["en"], "job", body.job_id, now))
+        db.commit()
+        row = db.execute("SELECT * FROM creative_projects WHERE id=?", (project_id,)).fetchone()
+        return project_payload(db, row, include_versions=True)
+
+
+@commercial_router.get("/projects")
+async def list_projects(user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+    with connect() as db:
+        rows = db.execute("SELECT * FROM creative_projects WHERE user_id=? ORDER BY is_favorite DESC,updated_at DESC LIMIT 100", (user["id"],)).fetchall()
+        return [project_payload(db, row) for row in rows]
+
+
+@commercial_router.get("/projects/{project_id}")
+async def get_project(project_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    with connect() as db:
+        row = db.execute("SELECT * FROM creative_projects WHERE id=? AND user_id=?", (project_id, user["id"])).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="项目不存在")
+        return project_payload(db, row, include_versions=True)
+
+
+@commercial_router.patch("/projects/{project_id}")
+async def update_project(project_id: int, body: ProjectUpdateRequest, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    updates = []
+    values: list[Any] = []
+    for column, value in (("title", body.title.strip() if body.title is not None else None), ("note", body.note.strip() if body.note is not None else None), ("is_favorite", int(body.is_favorite) if body.is_favorite is not None else None), ("recent_platform", body.recent_platform)):
+        if value is not None:
+            updates.append(f"{column}=?")
+            values.append(value)
+    if not updates:
+        raise HTTPException(status_code=400, detail="没有需要更新的内容")
+    values.extend([utc_now().isoformat(), project_id, user["id"]])
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        cursor = db.execute(f"UPDATE creative_projects SET {','.join(updates)},updated_at=? WHERE id=? AND user_id=?", (*values,))
+        if cursor.rowcount == 0:
+            db.rollback()
+            raise HTTPException(status_code=404, detail="项目不存在")
+        db.commit()
+        return project_payload(db, db.execute("SELECT * FROM creative_projects WHERE id=?", (project_id,)).fetchone(), include_versions=True)
+
+
+@commercial_router.delete("/projects/{project_id}")
+async def delete_project(project_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, bool]:
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        cursor = db.execute("DELETE FROM creative_projects WHERE id=? AND user_id=?", (project_id, user["id"]))
+        if cursor.rowcount == 0:
+            db.rollback()
+            raise HTTPException(status_code=404, detail="项目不存在")
+        db.commit()
+    return {"deleted": True}
+
+
+@commercial_router.post("/projects/{project_id}/versions", status_code=201)
+async def create_project_version(project_id: int, body: ProjectVersionRequest, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    now = utc_now().isoformat()
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        project = db.execute("SELECT * FROM creative_projects WHERE id=? AND user_id=?", (project_id, user["id"])).fetchone()
+        if not project:
+            db.rollback()
+            raise HTTPException(status_code=404, detail="项目不存在")
+        version_id = db.execute("INSERT INTO project_versions(project_id,user_id,label,platform,prompt_zh,prompt_en,source_type,source_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)", (project_id, user["id"], body.label.strip(), body.platform, body.prompt_zh.strip(), body.prompt_en.strip(), body.source_type, body.source_id, now)).lastrowid
+        db.execute("UPDATE creative_projects SET recent_platform=?,updated_at=? WHERE id=?", (body.platform, now, project_id))
+        db.commit()
+        return dict(db.execute("SELECT id,label,platform,prompt_zh,prompt_en,source_type,source_id,created_at FROM project_versions WHERE id=?", (version_id,)).fetchone())
+
+
+@commercial_router.delete("/projects/{project_id}/versions/{version_id}")
+async def delete_project_version(project_id: int, version_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, bool]:
+    with connect() as db:
+        cursor = db.execute("DELETE FROM project_versions WHERE id=? AND project_id=? AND user_id=?", (version_id, project_id, user["id"]))
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="项目版本不存在")
+        db.commit()
+    return {"deleted": True}
+
+
+@commercial_router.get("/projects/{project_id}/export")
+async def export_project(project_id: int, format: str = "json", user: dict[str, Any] = Depends(current_user)) -> Response:
+    if format not in {"json", "txt"}:
+        raise HTTPException(status_code=400, detail="仅支持 JSON 或 TXT 导出")
+    with connect() as db:
+        row = db.execute("SELECT * FROM creative_projects WHERE id=? AND user_id=?", (project_id, user["id"])).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="项目不存在")
+        payload = project_payload(db, row, include_versions=True)
+    if format == "json":
+        return Response(content=json.dumps(payload, ensure_ascii=False, indent=2), media_type="application/json", headers={"Content-Disposition": f'attachment; filename="project-{project_id}.json"'})
+    lines = [f"项目：{payload['title']}", f"备注：{payload['note']}", ""]
+    for version in payload["versions"]:
+        lines.extend([f"## {version['label']} · {version['platform']}", "中文：", version["prompt_zh"], "", "English:", version["prompt_en"], ""])
+    return Response(content="\n".join(lines), media_type="text/plain; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="project-{project_id}.txt"'})

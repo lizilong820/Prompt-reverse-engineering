@@ -5,5 +5,6 @@
   <view class="menu-section">
     <view class="menu-button" hover-class="menu-button-hover" bindtap="openHistory"><view><text class="menu-title">最近记录</text><text class="menu-meta">{{totalCount}} 条任务记录</text></view><text class="menu-arrow">›</text></view>
     <view class="menu-button" hover-class="menu-button-hover" bindtap="openLedger"><view><text class="menu-title">算力明细</text><text class="menu-meta">查看获得与消耗记录</text></view><text class="menu-arrow">›</text></view>
+    <view class="menu-button" hover-class="menu-button-hover" bindtap="openProjects"><view><text class="menu-title">创作项目</text><text class="menu-meta">收藏的提示词与版本</text></view><text class="menu-arrow">›</text></view>
   </view>
 </view>

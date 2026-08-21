@@ -20,4 +20,5 @@ Page({
   },
   openHistory() { wx.navigateTo({ url: "/pages/history/history" }); },
   openLedger() { wx.navigateTo({ url: "/pages/ledger/ledger" }); }
+  ,openProjects() { wx.navigateTo({ url: "/pages/projects/projects" }); }
 });

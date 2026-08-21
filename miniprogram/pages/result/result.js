@@ -6,7 +6,7 @@ Page({
     job: null, analysis: { timeline: [] }, facts: [], prompt: "", promptZh: "", promptEn: "", language: "zh",
     platform: "universal", platformOptions: [], platforms: {}, versionKey: "base", versionOptions: [{ key: "base", label: "原始版本" }],
     optimizations: [], optimizationStrategies: Object.keys(OPTIMIZATION_LABELS).map((key) => ({ key, label: OPTIMIZATION_LABELS[key] })),
-    optimizing: false, optimizationCost: 1, computeCount: 0, errorMessage: ""
+    optimizing: false, optimizationCost: 1, computeCount: 0, errorMessage: "", project: null, projectSaving: false
   },
   pollTimer: null,
   optimizationTimer: null,
@@ -29,6 +29,8 @@ Page({
       const platformOptions = Object.keys(platforms).map((key) => ({ key, label: platforms[key].label || key }));
       const platform = platformOptions[0]?.key || "universal";
       this.setData({ job, analysis, facts, isImageExpansion: job.analysis_task === "image_expand_video", promptZh, promptEn, platforms, platformOptions, platform, prompt: platforms[platform]?.zh || promptZh, computeCount: user.compute_count ?? user.credits ?? 0, optimizationCost: user.pricing?.optimization || 1 });
+      const projects = await api("/api/v1/projects").catch(() => []);
+      this.setData({ project: projects.find((item) => item.source_job_id === Number(this.jobId)) || null });
       await this.loadOptimizations();
     } catch (error) { this.setData({ errorMessage: error.message }); }
   },
@@ -94,5 +96,17 @@ Page({
   async copyPrompt() {
     if (!(await ensurePrivacyAuthorized())) return;
     wx.setClipboardData({ data: this.data.prompt });
+  },
+  async saveProject() {
+    if (this.data.projectSaving) return;
+    const title = await new Promise((resolve) => wx.showModal({ title: "保存创作项目", editable: true, content: this.data.project?.title || this.data.job.filename || "未命名项目", confirmText: "保存", success: (result) => resolve(result.confirm ? (result.content || this.data.job.filename || "未命名项目") : ""), fail: () => resolve("") }));
+    if (!title) return;
+    this.setData({ projectSaving: true });
+    try {
+      const project = await api("/api/v1/projects", { method: "POST", data: { job_id: Number(this.jobId), title, note: this.data.project?.note || "", platform: this.data.platform } });
+      this.setData({ project });
+      wx.showToast({ title: "项目已保存" });
+    } catch (error) { wx.showToast({ title: error.message || "保存失败", icon: "none" }); }
+    finally { this.setData({ projectSaving: false }); }
   }
 });
