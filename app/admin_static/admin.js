@@ -7,6 +7,7 @@ const state = {
   feedback: [],
   upstream: [],
   ads: [],
+  moderation: [],
   taskTotal: 0,
   taskOffset: 0,
   taskLimit: 50,
@@ -127,6 +128,11 @@ function renderTable() {
     $("tableBody").innerHTML = state.ads.map((item) => `<tr><td>#${item.id}</td><td><code>${escapeHtml(item.openid || item.user_id)}</code></td><td><strong>+${item.amount}</strong></td><td><span class="status ok">已领取</span></td><td>${formatDate(item.created_at)}</td><td>${escapeHtml(item.reference_type || "reward_claim")}</td></tr>`).join("") || '<tr><td colspan="6">暂无广告领取记录</td></tr>';
     return;
   }
+  if (state.view === "moderation") {
+    $("tableHead").innerHTML = "<tr><th>ID</th><th>用户</th><th>文件</th><th>类型</th><th>来源任务</th><th>状态</th><th>创建时间</th><th>过期时间</th><th></th></tr>";
+    $("tableBody").innerHTML = state.moderation.map((item) => `<tr><td>#${item.id}</td><td><code>${escapeHtml(item.openid || item.user_id)}</code></td><td>${escapeHtml(item.original_filename || "-")}</td><td>${item.media_type === "video" ? "视频关键帧" : "图片预览"}</td><td>${escapeHtml(item.reference_type)} #${item.reference_id}${item.role !== "source" ? ` · ${escapeHtml(item.role)}` : ""}</td><td>${statusTag(item.status)}</td><td>${formatDate(item.created_at)}</td><td>${formatDate(item.expires_at)}</td><td><button class="action" data-moderation-preview="${item.id}">查看预览</button></td></tr>`).join("") || '<tr><td colspan="9">暂无审核预览</td></tr>';
+    return;
+  }
   if (state.view === "feedback") {
     $("tableHead").innerHTML = "<tr><th>ID</th><th>用户</th><th>关联任务</th><th>分类</th><th>内容</th><th>状态</th><th>时间</th><th></th></tr>";
     $("tableBody").innerHTML = state.feedback.map((ticket) => "<tr><td>#" + ticket.id + "</td><td><code>" + escapeHtml(ticket.openid) + "</code></td><td>" + escapeHtml(ticket.task_type) + " #" + ticket.task_id + "</td><td>" + escapeHtml(ticket.category) + "</td><td>" + escapeHtml(ticket.content) + "</td><td>" + feedbackStatusTag(ticket.status) + "</td><td>" + formatDate(ticket.created_at) + "</td><td><button class=\"action\" data-feedback=\"" + ticket.id + "\">处理</button></td></tr>").join("") || "<tr><td colspan=\"8\">暂无工单</td></tr>";
@@ -152,6 +158,8 @@ async function load() {
           ? request("/api/admin/feedback?status=" + encodeURIComponent($("statusSelect").value) + "&query=" + encodeURIComponent($("searchInput").value) + "&limit=" + state.taskLimit + "&offset=" + state.taskOffset)
           : state.view === "ads"
             ? request("/api/admin/audit/credits?kind=ad&query=" + encodeURIComponent($("searchInput").value) + "&limit=" + state.taskLimit + "&offset=" + state.taskOffset)
+            : state.view === "moderation"
+              ? request(`/api/admin/moderation/previews?query=${encodeURIComponent($("searchInput").value)}&limit=${state.taskLimit}&offset=${state.taskOffset}`)
           : state.view === "upstream"
           ? request("/api/admin/monitoring/upstream")
         : request(`/api/admin/jobs?status=${encodeURIComponent($("statusSelect").value)}`);
@@ -161,6 +169,7 @@ async function load() {
     if (state.view === "users") state.users = list;
     else if (state.view === "operations") { state.tasks = list.items || []; state.taskTotal = list.total || 0; renderPagination(); }
     else if (state.view === "ads") { state.ads = list.items || []; state.taskTotal = list.total || 0; renderPagination(); }
+    else if (state.view === "moderation") { state.moderation = list.items || []; state.taskTotal = list.total || 0; renderPagination(); }
     else if (state.view === "feedback") { state.feedback = list.items || []; state.taskTotal = list.total || 0; renderPagination(); }
     else if (state.view === "upstream") { state.upstream = list.services || []; renderPagination(); }
     else state.jobs = list;
@@ -174,7 +183,7 @@ async function load() {
 }
 
 function renderPagination() {
-  const visible = state.view === "operations" || state.view === "feedback" || state.view === "ads";
+  const visible = state.view === "operations" || state.view === "feedback" || state.view === "ads" || state.view === "moderation";
   $("pagination").hidden = !visible;
   if (!visible) return;
   const start = state.taskTotal ? state.taskOffset + 1 : 0;
@@ -277,8 +286,8 @@ document.addEventListener("DOMContentLoaded", () => {
     $("createdAfter").hidden = state.view !== "operations";
     $("createdBefore").hidden = state.view !== "operations";
     $("failureInput").hidden = state.view !== "operations";
-    $("pagination").hidden = state.view !== "operations" && state.view !== "feedback";
-    $("searchInput").placeholder = state.view === "operations" ? "搜索任务 ID / 用户 / 文件名" : state.view === "feedback" ? "搜索工单 / 用户 / 内容" : state.view === "ads" ? "搜索广告记录 / 用户 / reference_id" : "搜索用户 ID / openid";
+    $("pagination").hidden = !["operations", "feedback", "ads", "moderation"].includes(state.view);
+    $("searchInput").placeholder = state.view === "operations" ? "搜索任务 ID / 用户 / 文件名" : state.view === "feedback" ? "搜索工单 / 用户 / 内容" : state.view === "ads" ? "搜索广告记录 / 用户 / reference_id" : state.view === "moderation" ? "搜索用户 / 文件名 / 任务 ID" : "搜索用户 ID / openid";
     document.querySelectorAll(".tab").forEach((item) => item.classList.toggle("active", item === button));
     load();
   }));
@@ -308,9 +317,24 @@ document.addEventListener("DOMContentLoaded", () => {
     if (task) await openTask(task.dataset.taskType, task.dataset.taskId);
     const feedback = event.target.closest("[data-feedback]");
     if (feedback) await openFeedback(feedback.dataset.feedback);
+    const moderation = event.target.closest("[data-moderation-preview]");
+    if (moderation) await openModerationPreview(moderation.dataset.moderationPreview);
   });
   if (state.token) showApp();
 });
+
+async function openModerationPreview(id) {
+  try {
+    const item = state.moderation.find((entry) => String(entry.id) === String(id));
+    const response = await fetch(`/api/admin/moderation/previews/${id}/file`, { headers: { "X-Admin-Token": state.token } });
+    if (!response.ok) throw new Error("审核预览加载失败或已过期");
+    const url = URL.createObjectURL(await response.blob());
+    $("drawerTitle").textContent = "内容审核预览";
+    $("drawerBody").innerHTML = `<div class="detail-card"><img class="moderation-preview-image" src="${url}" alt="审核预览"></div><div class="detail-card"><div class="detail-row"><span>用户</span><strong>${escapeHtml(item?.openid || item?.user_id || "-")}</strong></div><div class="detail-row"><span>文件</span><strong>${escapeHtml(item?.original_filename || "-")}</strong></div><div class="detail-row"><span>来源任务</span><strong>${escapeHtml(item?.reference_type || "-")} #${item?.reference_id || "-"}</strong></div><div class="detail-row"><span>创建时间</span><strong>${formatDate(item?.created_at)}</strong></div><div class="detail-row"><span>过期时间</span><strong>${formatDate(item?.expires_at)}</strong></div></div>`;
+    $("drawer").hidden = false;
+    $("closeDrawer").onclick = () => { URL.revokeObjectURL(url); $("drawer").hidden = true; };
+  } catch (error) { toast(error.message); }
+}
 
 async function openTask(taskType, taskId) {
   try {

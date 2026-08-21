@@ -7,14 +7,15 @@ import os
 import secrets
 from collections import Counter
 from datetime import datetime, time, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
-from app.commercial import AD_DAILY_LIMIT, IMAGE_CREDIT_COST, VIDEO_CREDIT_COST, change_credits, connect, hash_token, utc_now
+from app.commercial import AD_DAILY_LIMIT, IMAGE_CREDIT_COST, VIDEO_CREDIT_COST, MODERATION_PREVIEW_DIR, cleanup_expired_moderation_previews, change_credits, connect, hash_token, utc_now
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD_HASH = os.getenv("ADMIN_PASSWORD_HASH", "").strip()
@@ -843,6 +844,67 @@ async def operation_task_detail(task_type: str, task_id: int, _: dict[str, str] 
     for key in ("original_path", "generated_path", "artifact_path", "frames_path", "manifest_path", "package_path"):
         payload.pop(key, None)
     return {"task": payload, "user": row_dict(user), "ledger": [row_dict(item) for item in ledger], "audits": [row_dict(item) for item in audits]}
+
+
+def moderation_status(db: Any, reference_type: str, reference_id: int) -> str:
+    mapping = {
+        "job": "SELECT status FROM jobs WHERE id=?",
+        "depth_job": "SELECT status FROM depth_jobs WHERE id=?",
+        "replication_diagnostic": "SELECT status FROM replication_diagnostics WHERE id=?",
+    }
+    query = mapping.get(reference_type)
+    if not query:
+        return "unknown"
+    row = db.execute(query, (reference_id,)).fetchone()
+    if not row:
+        return "deleted"
+    status = row["status"]
+    return normalized_task_status("depth" if reference_type == "depth_job" else "diagnostic" if reference_type == "replication_diagnostic" else "job", status)
+
+
+@admin_router.get("/moderation/previews")
+async def moderation_previews(query: str = "", media_type: str = "", limit: int = 50, offset: int = 0, _: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
+    cleanup_expired_moderation_previews()
+    limit = max(1, min(limit, 100))
+    offset = max(0, min(offset, 100000))
+    clauses = []
+    params: list[Any] = []
+    if media_type in {"image", "video"}:
+        clauses.append("p.media_type=?")
+        params.append(media_type)
+    if query.strip():
+        pattern = f"%{query.strip()}%"
+        clauses.append("(CAST(p.id AS TEXT) LIKE ? OR CAST(p.reference_id AS TEXT) LIKE ? OR p.original_filename LIKE ? OR u.openid LIKE ?)")
+        params.extend([pattern, pattern, pattern, pattern])
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    with connect() as db:
+        total = db.execute(f"SELECT COUNT(*) FROM moderation_previews p JOIN users u ON u.id=p.user_id{where}", params).fetchone()[0]
+        rows = db.execute(f"SELECT p.*,u.openid FROM moderation_previews p JOIN users u ON u.id=p.user_id{where} ORDER BY p.created_at DESC LIMIT ? OFFSET ?", [*params, limit, offset]).fetchall()
+        items = []
+        for row in rows:
+            item = row_dict(row)
+            item["status"] = moderation_status(db, row["reference_type"], row["reference_id"])
+            item["preview_url"] = f"/api/admin/moderation/previews/{row['id']}/file"
+            item.pop("preview_path", None)
+            items.append(item)
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@admin_router.get("/moderation/previews/{preview_id}/file")
+async def moderation_preview_file(preview_id: int, _: dict[str, str] = Depends(admin_user)) -> FileResponse:
+    cleanup_expired_moderation_previews()
+    with connect() as db:
+        row = db.execute("SELECT preview_path,expires_at FROM moderation_previews WHERE id=?", (preview_id,)).fetchone()
+    if not row or row["expires_at"] <= utc_now().isoformat():
+        raise HTTPException(status_code=404, detail="审核预览不存在或已过期")
+    path = Path(row["preview_path"])
+    try:
+        valid = path.resolve().is_relative_to(MODERATION_PREVIEW_DIR.resolve())
+    except (OSError, ValueError):
+        valid = False
+    if not valid or not path.is_file():
+        raise HTTPException(status_code=404, detail="审核预览文件不存在")
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=60"})
 
 
 @admin_router.post("/operations/tasks/{task_type}/{task_id}/refund")

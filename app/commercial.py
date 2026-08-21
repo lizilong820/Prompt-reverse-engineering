@@ -10,6 +10,7 @@ import secrets
 import shutil
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Header, HTT
 from fastapi.responses import FileResponse, Response
 from starlette.datastructures import Headers
 from pydantic import BaseModel, Field
+from PIL import Image, ImageDraw, ImageOps
 
 from app.video_sources.downloader import download_video, validate_remote_target
 from app.video_sources.errors import InvalidUploadError
@@ -50,6 +52,8 @@ DEPTH_RESULT_RETENTION_HOURS = int(os.getenv("DEPTH_RESULT_RETENTION_HOURS", "24
 DEPTH_ARTIFACT_SECRET = os.getenv("DEPTH_ARTIFACT_SECRET", "").strip() or WX_APP_SECRET
 DB_PATH = Path(DATA_DIR) / "commercial.sqlite3"
 DEPTH_RESULTS_DIR = Path(DATA_DIR) / "depth-results"
+MODERATION_PREVIEW_DIR = Path(DATA_DIR) / "moderation-previews"
+MODERATION_PREVIEW_RETENTION_HOURS = int(os.getenv("MODERATION_PREVIEW_RETENTION_HOURS", "72"))
 ANALYSIS_DEPTHS = {"standard", "detailed", "professional"}
 ANALYSIS_TASKS = {"reconstruct", "image_expand_video"}
 DEPTH_PRESETS = {"quick_preview", "standard_depth", "motion_character"}
@@ -340,6 +344,19 @@ def connect() -> sqlite3.Connection:
             updated_at TEXT NOT NULL,
             updated_by TEXT NOT NULL DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS moderation_previews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            reference_type TEXT NOT NULL,
+            reference_id INTEGER NOT NULL,
+            role TEXT NOT NULL DEFAULT 'source',
+            original_filename TEXT NOT NULL DEFAULT '',
+            media_type TEXT NOT NULL,
+            preview_path TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(reference_type, reference_id, role)
+        );
         CREATE INDEX IF NOT EXISTS idx_jobs_user_created ON jobs(user_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_ledger_user_created ON credit_ledger(user_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_depth_jobs_user_created ON depth_jobs(user_id, id DESC);
@@ -352,6 +369,8 @@ def connect() -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_feedback_user_created ON feedback_tickets(user_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_feedback_status_created ON feedback_tickets(status, id DESC);
         CREATE INDEX IF NOT EXISTS idx_announcements_status_time ON announcements(status, starts_at, ends_at);
+        CREATE INDEX IF NOT EXISTS idx_moderation_previews_created ON moderation_previews(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_moderation_previews_expires ON moderation_previews(expires_at);
     """)
     try:
         db.execute("ALTER TABLE users ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0")
@@ -419,6 +438,66 @@ def recover_interrupted_jobs() -> None:
                     path.unlink(missing_ok=True)
                 elif path.is_dir():
                     shutil.rmtree(path, ignore_errors=True)
+    cleanup_expired_moderation_previews()
+
+
+def cleanup_expired_moderation_previews() -> None:
+    MODERATION_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+    now = utc_now().isoformat()
+    with connect() as db:
+        rows = db.execute("SELECT id, preview_path FROM moderation_previews WHERE expires_at<=?", (now,)).fetchall()
+        for row in rows:
+            path = Path(row["preview_path"])
+            try:
+                if path.resolve().is_relative_to(MODERATION_PREVIEW_DIR.resolve()):
+                    path.unlink(missing_ok=True)
+            except (OSError, ValueError):
+                logger.warning("Invalid moderation preview path: %s", path)
+        if rows:
+            db.execute("DELETE FROM moderation_previews WHERE expires_at<=?", (now,))
+
+
+def create_moderation_preview(media_path: Path, mode: str, user_id: int, reference_type: str, reference_id: int, role: str, original_filename: str) -> None:
+    """Store a short-lived, low-resolution admin-only preview; never retain the original upload."""
+    try:
+        MODERATION_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+        output = MODERATION_PREVIEW_DIR / f"{secrets.token_urlsafe(18)}.jpg"
+        if mode == "image":
+            with Image.open(media_path) as source:
+                image = ImageOps.exif_transpose(source).convert("RGB")
+                image.thumbnail((960, 960), Image.Resampling.LANCZOS)
+                image.save(output, "JPEG", quality=78, optimize=True)
+        else:
+            from app.main import get_video_duration, video_frames
+            frames = video_frames(str(media_path), get_video_duration(str(media_path)))
+            thumbs = []
+            for data, _, label in frames:
+                with Image.open(BytesIO(data)) as source:
+                    image = ImageOps.exif_transpose(source).convert("RGB")
+                    image.thumbnail((320, 220), Image.Resampling.LANCZOS)
+                    canvas = Image.new("RGB", (320, 250), "#111111")
+                    canvas.paste(image, ((320 - image.width) // 2, 4))
+                    ImageDraw.Draw(canvas).text((8, 228), label, fill="white")
+                    thumbs.append(canvas)
+            sheet = Image.new("RGB", (960, 500), "#111111")
+            for index, image in enumerate(thumbs[:6]):
+                sheet.paste(image, ((index % 3) * 320, (index // 3) * 250))
+            sheet.save(output, "JPEG", quality=78, optimize=True)
+        expires = utc_now() + timedelta(hours=MODERATION_PREVIEW_RETENTION_HOURS)
+        with connect() as db:
+            old = db.execute("SELECT preview_path FROM moderation_previews WHERE reference_type=? AND reference_id=? AND role=?", (reference_type, reference_id, role)).fetchone()
+            db.execute("DELETE FROM moderation_previews WHERE reference_type=? AND reference_id=? AND role=?", (reference_type, reference_id, role))
+            if old:
+                old_path = Path(old["preview_path"])
+                if old_path.resolve().is_relative_to(MODERATION_PREVIEW_DIR.resolve()):
+                    old_path.unlink(missing_ok=True)
+            db.execute("INSERT INTO moderation_previews(user_id,reference_type,reference_id,role,original_filename,media_type,preview_path,expires_at,created_at) VALUES(?,?,?,?,?,?,?,?,?)", (user_id, reference_type, reference_id, role, original_filename[:255], mode, str(output), expires.isoformat(), utc_now().isoformat()))
+    except Exception:
+        logger.exception("Moderation preview generation failed: reference=%s/%s role=%s", reference_type, reference_id, role)
+        try:
+            output.unlink(missing_ok=True)
+        except (UnboundLocalError, OSError):
+            pass
 
 
 def hash_token(token: str) -> str:
@@ -540,6 +619,7 @@ def fail_analysis_job(job_id: int, user_id: int, cost: int, message: str) -> Non
 
 async def process_job(job_id: int, user_id: int, media_path: Path, filename: str, content_type: str, mode: str, cost: int, analysis_depth: str, analysis_task: str) -> None:
     try:
+        await asyncio.to_thread(create_moderation_preview, media_path, mode, user_id, "job", job_id, "source", filename)
         # 延迟导入，避免 app.main 注册 commercial_router 时形成循环依赖。
         from app.main import analyze_media_upload
 
@@ -835,6 +915,7 @@ async def upload_diagnostic_video(diagnostic_id: int, role: str, file: UploadFil
         # Validate duration before accepting the upload so incomplete/damaged files are refunded immediately.
         from app.main import get_video_duration
         get_video_duration(str(media_path))
+        await asyncio.to_thread(create_moderation_preview, media_path, "video", user["id"], "replication_diagnostic", diagnostic_id, role, file.filename or f"{role}.mp4")
     except Exception as exc:
         fail_diagnostic(diagnostic_id, user["id"], row["cost"], str(getattr(exc, "detail", "诊断视频上传失败，算力次数已退回")))
         raise
@@ -945,6 +1026,7 @@ def mark_depth_waiting(local_job_id: int) -> None:
 
 async def submit_depth_upload_job(local_job_id: int, user_id: int, media_path: Path, filename: str, content_type: str, processing_options: dict[str, int | float | bool | str], cost: int) -> None:
     try:
+        await asyncio.to_thread(create_moderation_preview, media_path, "video", user_id, "depth_job", local_job_id, "source", filename)
         deadline = asyncio.get_running_loop().time() + DEPTH_WAIT_TIMEOUT_SECONDS
         async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=15.0)) as client:
             while True:
