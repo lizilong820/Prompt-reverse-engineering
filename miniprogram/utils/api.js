@@ -54,6 +54,10 @@ function uploadDepthJob(filePath, preset, idempotencyKey) {
   return uploadFileTask("/api/v1/depth/jobs", filePath, { preset, idempotency_key: idempotencyKey });
 }
 
+function uploadDiagnosticVideo(diagnosticId, role, filePath) {
+  return uploadFileTask(`/api/v1/replication-diagnostics/${diagnosticId}/${role}`, filePath, {});
+}
+
 function downloadAuthenticated(path) {
   return new Promise((resolve, reject) => {
     wx.downloadFile({
@@ -71,4 +75,4 @@ function downloadAuthenticated(path) {
 let optionsProgress = () => {};
 function onUploadProgress(callback) { optionsProgress = callback || (() => {}); }
 
-module.exports = { api, uploadJob, uploadDepthJob, downloadAuthenticated, onUploadProgress };
+module.exports = { api, uploadJob, uploadDepthJob, uploadDiagnosticVideo, downloadAuthenticated, onUploadProgress };

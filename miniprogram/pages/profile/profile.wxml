@@ -1,7 +1,7 @@
 <view class="page">
   <view class="profile-head"><view class="avatar">PL</view><view><text class="eyebrow">MY ACCOUNT</text><view class="section-title">我的算力</view></view></view>
   <view class="balance"><text>当前算力次数</text><strong>{{computeCount}}</strong><small>图片、视频和深度工具均消耗 1 次</small></view>
-  <view class="stats"><view><strong>{{totalCount}}</strong><text>累计任务</text></view><view><strong>{{jobs.length}}</strong><text>提示词反推</text></view><view><strong>{{depthJobs.length}}</strong><text>深度工具</text></view></view>
+  <view class="stats"><view><strong>{{totalCount}}</strong><text>累计任务</text></view><view><strong>{{jobs.length}}</strong><text>提示词反推</text></view><view><strong>{{depthJobs.length + diagnosticJobs.length}}</strong><text>创作工具</text></view></view>
   <view class="menu-section">
     <view class="menu-button" hover-class="menu-button-hover" bindtap="openHistory"><view><text class="menu-title">最近记录</text><text class="menu-meta">{{totalCount}} 条任务记录</text></view><text class="menu-arrow">›</text></view>
     <view class="menu-button" hover-class="menu-button-hover" bindtap="openLedger"><view><text class="menu-title">算力明细</text><text class="menu-meta">查看获得与消耗记录</text></view><text class="menu-arrow">›</text></view>

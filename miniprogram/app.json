@@ -5,7 +5,9 @@
     "pages/result/result",
     "pages/profile/profile",
     "pages/history/history",
-    "pages/ledger/ledger"
+    "pages/ledger/ledger",
+    "pages/diagnostic/diagnostic",
+    "pages/diagnostic-result/diagnostic-result"
   ],
   "window": {
     "navigationBarTitleText": "Prompt Lens",

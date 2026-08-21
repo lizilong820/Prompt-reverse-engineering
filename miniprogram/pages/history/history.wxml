@@ -1,8 +1,8 @@
 <view class="page">
   <view class="page-header"><view><text class="eyebrow">ACTIVITY</text><view class="section-title">最近记录</view></view><text class="count">{{records.length}} 条</text></view>
   <view wx:if="{{records.length}}" class="records">
-    <view class="record {{(item.recordType === 'analysis' && item.status === 'succeeded') || (item.recordType === 'depth' && item.status === 'completed') ? 'clickable' : ''}}" wx:for="{{records}}" wx:key="recordKey" data-id="{{item.id}}" data-type="{{item.recordType}}" bindtap="openRecord">
-      <view class="record-mark">{{item.recordType === 'depth' ? 'D/' : item.mode === 'video' ? 'V/' : 'I/'}}</view>
+    <view class="record {{(item.recordType === 'analysis' && item.status === 'succeeded') || (item.recordType === 'depth' && item.status === 'completed') || (item.recordType === 'diagnostic' && item.status === 'succeeded') ? 'clickable' : ''}}" wx:for="{{records}}" wx:key="recordKey" data-id="{{item.id}}" data-type="{{item.recordType}}" bindtap="openRecord">
+      <view class="record-mark">{{item.recordType === 'depth' ? 'D/' : item.recordType === 'diagnostic' ? 'R/' : item.mode === 'video' ? 'V/' : 'I/'}}</view>
       <view class="record-copy"><strong>{{item.title}}</strong><text>{{item.filename}}</text><small>{{item.createdText}}</small></view>
       <view class="record-state {{item.status === 'failed' ? 'failed' : ''}}">{{item.statusText}}</view>
     </view>

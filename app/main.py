@@ -94,6 +94,35 @@ class HistoryItem(BaseModel):
     confidence: int
 
 
+class DiagnosticScores(BaseModel):
+    subject: int = Field(ge=0, le=100)
+    action: int = Field(ge=0, le=100)
+    camera: int = Field(ge=0, le=100)
+    composition: int = Field(ge=0, le=100)
+    style: int = Field(ge=0, le=100)
+    overall: int = Field(ge=0, le=100)
+
+
+class DiagnosticDifference(BaseModel):
+    dimension: str
+    severity: str
+    original: str
+    generated: str
+    advice: str
+
+
+class CorrectedPrompt(BaseModel):
+    zh: str
+    en: str
+
+
+class ReplicationDiagnostic(BaseModel):
+    summary: str
+    scores: DiagnosticScores
+    differences: list[DiagnosticDifference]
+    corrected_prompt: CorrectedPrompt
+
+
 PROMPT_OPTIMIZATION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -130,6 +159,36 @@ ANALYSIS_SCHEMA: dict[str, Any] = {
             "required": ["start", "end", "description", "camera_motion", "subject_motion"]}},
     },
     "required": ["subject", "scene", "composition", "camera", "lighting", "color", "style", "details", "negative_prompt", "confidence", "timeline", "prompt_zh", "prompt_en"],
+}
+
+REPLICATION_DIAGNOSTIC_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "summary": {"type": "string"},
+        "scores": {
+            "type": "object", "additionalProperties": False,
+            "properties": {key: {"type": "integer", "minimum": 0, "maximum": 100} for key in ("subject", "action", "camera", "composition", "style", "overall")},
+            "required": ["subject", "action", "camera", "composition", "style", "overall"],
+        },
+        "differences": {
+            "type": "array",
+            "items": {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "dimension": {"type": "string"}, "severity": {"type": "string", "enum": ["high", "medium", "low"]},
+                    "original": {"type": "string"}, "generated": {"type": "string"}, "advice": {"type": "string"},
+                },
+                "required": ["dimension", "severity", "original", "generated", "advice"],
+            },
+        },
+        "corrected_prompt": {
+            "type": "object", "additionalProperties": False,
+            "properties": {"zh": {"type": "string"}, "en": {"type": "string"}},
+            "required": ["zh", "en"],
+        },
+    },
+    "required": ["summary", "scores", "differences", "corrected_prompt"],
 }
 
 
@@ -351,6 +410,63 @@ async def call_vision(images: list[tuple[bytes, str, str]], analysis_depth: str 
                     raise
                 logger.warning("Vision API 未遵循 JSON Schema，切换到兼容 JSON 模式重试")
     raise HTTPException(status_code=502, detail="Vision API 未返回有效结果")
+
+
+async def diagnose_video_replication(original_path: str, generated_path: str) -> ReplicationDiagnostic:
+    """Compare two videos using aligned, explicitly labelled frame sequences."""
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=503, detail="视频复刻诊断服务尚未配置")
+    original_frames = video_frames(original_path, get_video_duration(original_path))
+    generated_frames = video_frames(generated_path, get_video_duration(generated_path))
+    await check_images(original_frames)
+    await check_images(generated_frames)
+    instruction = (
+        "比较原视频与生成视频的复刻质量。输入帧已明确分组，绝不能混淆两组视频。"
+        "按主体外观与一致性、动作时序、运镜路径、构图空间关系、光影色彩与风格五项分别评分。"
+        "overall 必须综合五项得出；differences 只列出可观察到的差异，severity 只能是 high、medium、low。"
+        "corrected_prompt 必须根据原视频重写为可直接用于视频生成模型的完整中英文提示词，包含首帧、动作时间线、"
+        "运镜、光影、风格、物理连续性、结尾状态和负面约束，不得虚构原视频不存在的内容。只返回严格 JSON。"
+    )
+    content: list[dict[str, Any]] = [{"type": "text", "text": instruction}]
+    for group, frames in (("ORIGINAL/原视频", original_frames), ("GENERATED/生成视频", generated_frames)):
+        content.append({"type": "text", "text": f"=== {group} 开始 ==="})
+        for data, content_type, label in frames:
+            content.append({"type": "text", "text": f"{group} · {label}"})
+            content.append({"type": "image_url", "image_url": {"url": as_data_url(data, content_type)}})
+        content.append({"type": "text", "text": f"=== {group} 结束 ==="})
+    formats = [
+        {"type": "json_schema", "json_schema": {"name": "replication_diagnostic", "strict": True, "schema": REPLICATION_DIAGNOSTIC_SCHEMA}},
+        {"type": "json_object"},
+    ]
+    async with httpx.AsyncClient(timeout=httpx.Timeout(150.0, connect=15.0)) as client:
+        for attempt, response_format in enumerate(formats, start=1):
+            try:
+                response = await client.post(
+                    f"{OPENAI_BASE_URL}/chat/completions",
+                    headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+                    json={"model": OPENAI_MODEL, "temperature": 0.1, "response_format": response_format, "messages": [{"role": "system", "content": "你是视频复刻质量诊断专家。"}, {"role": "user", "content": content}]},
+                )
+            except httpx.HTTPError as exc:
+                raise HTTPException(status_code=502, detail="无法连接视频复刻诊断服务") from exc
+            if response.is_error:
+                logger.error("Replication diagnostic API %s: %s", response.status_code, response.text[:500])
+                if attempt == len(formats):
+                    raise HTTPException(status_code=502, detail="视频复刻诊断请求失败")
+                continue
+            try:
+                raw = response.json()["choices"][0]["message"]["content"]
+                if isinstance(raw, list):
+                    raw = "".join(part.get("text", "") for part in raw)
+                raw = raw.strip()
+                if raw.startswith("```json") and raw.endswith("```"):
+                    raw = raw[7:-3].strip()
+                elif raw.startswith("```") and raw.endswith("```"):
+                    raw = raw[3:-3].strip()
+                return ReplicationDiagnostic.model_validate_json(raw)
+            except (KeyError, IndexError, TypeError, ValueError):
+                if attempt == len(formats):
+                    raise HTTPException(status_code=502, detail="视频复刻诊断结果格式异常")
+    raise HTTPException(status_code=502, detail="视频复刻诊断未返回有效结果")
 
 
 def run_command(command: list[str]) -> str:

@@ -25,6 +25,7 @@ Page({
     this.active = false;
     if (this.timer) clearTimeout(this.timer);
   },
+  openDiagnostic() { wx.navigateTo({ url: "/pages/diagnostic/diagnostic" }); },
   chooseSource(event) {
     this.stopPolling();
     this.setData({ sourceMode: event.currentTarget.dataset.source, filePath: "", fileName: "", videoLink: "", job: null, resultVideoPath: "", previewLoading: false });

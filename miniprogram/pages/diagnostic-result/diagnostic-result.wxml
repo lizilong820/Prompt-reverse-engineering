@@ -1,0 +1,9 @@
+<view class="page" wx:if="{{result}}">
+  <view class="result-head"><view><text class="eyebrow">DIAGNOSTIC RESULT</text><view class="section-title">复刻质量报告</view></view><view class="overall"><strong>{{result.scores.overall}}</strong><text>综合分</text></view></view>
+  <view class="summary">{{result.summary}}</view>
+  <view class="scores"><view class="score" wx:for="{{scoreItems}}" wx:key="key"><view><text>{{item.label}}</text><strong>{{item.value}}</strong></view><progress percent="{{item.value}}" stroke-width="5" /></view></view>
+  <view class="difference-block"><view class="block-title">不一致原因与修正</view><view class="difference" wx:for="{{result.differences}}" wx:key="index"><view class="difference-head"><strong>{{item.dimension}}</strong><text class="{{item.severity}}">{{item.severity === 'high' ? '高影响' : item.severity === 'medium' ? '中影响' : '低影响'}}</text></view><text><label>原视频</label>{{item.original}}</text><text><label>生成视频</label>{{item.generated}}</text><view>{{item.advice}}</view></view></view>
+  <view class="prompt-block"><view class="prompt-head"><text class="block-title">修正后的提示词</text><button bindtap="copyPrompt">复制</button></view><view class="language-switch"><button class="{{language === 'zh' ? 'active' : ''}}" data-language="zh" bindtap="switchLanguage">中文</button><button class="{{language === 'en' ? 'active' : ''}}" data-language="en" bindtap="switchLanguage">English</button></view><text selectable>{{prompt}}</text></view>
+</view>
+<view wx:elif="{{errorMessage}}" class="empty">{{errorMessage}}</view>
+<view wx:else class="empty">正在逐帧对比两段视频，请保持页面打开</view>

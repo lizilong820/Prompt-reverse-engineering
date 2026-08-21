@@ -1,0 +1,9 @@
+<view class="page diagnostic-page">
+  <view class="page-head"><text class="eyebrow">REPLICATION DIAGNOSTIC</text><view class="section-title">视频复刻诊断</view><text>比较原视频与生成结果，定位提示词偏差</text></view>
+  <view class="balance-row"><text>可用 {{computeCount}} 次</text><text>本次 {{cost}} 次</text></view>
+  <view class="video-field"><view class="field-head"><strong>01 原视频</strong><text>复刻目标</text></view><view class="video-box {{originalPath ? 'has-video' : ''}}" data-role="original" bindtap="chooseVideo"><video wx:if="{{originalPath}}" src="{{originalPath}}" controls catchtap="noop" /><view wx:else><text class="upload-symbol">↑</text><strong>选择原视频</strong><small>1-90 秒 · 最大 180MB</small></view></view><text class="file-name" wx:if="{{originalName}}">{{originalName}}</text></view>
+  <view class="video-field"><view class="field-head"><strong>02 生成视频</strong><text>待诊断结果</text></view><view class="video-box {{generatedPath ? 'has-video' : ''}}" data-role="generated" bindtap="chooseVideo"><video wx:if="{{generatedPath}}" src="{{generatedPath}}" controls catchtap="noop" /><view wx:else><text class="upload-symbol">↑</text><strong>选择生成视频</strong><small>1-90 秒 · 最大 180MB</small></view></view><text class="file-name" wx:if="{{generatedName}}">{{generatedName}}</text></view>
+  <view wx:if="{{submitting}}" class="upload-state"><text>{{stageText}}</text><progress percent="{{progress}}" active stroke-width="5" /></view>
+  <button class="primary" bindtap="submit" disabled="{{submitting || !originalPath || !generatedPath}}">{{submitting ? '正在上传 ' + progress + '%' : '开始五维复刻诊断'}}</button>
+  <text class="notice">主体 · 动作 · 运镜 · 构图 · 风格 / 失败自动返还算力</text>
+</view>

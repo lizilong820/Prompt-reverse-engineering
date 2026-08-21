@@ -44,6 +44,7 @@ AD_DAILY_LIMIT = int(os.getenv("AD_DAILY_LIMIT", "20"))
 AD_COOLDOWN_SECONDS = int(os.getenv("AD_COOLDOWN_SECONDS", "3"))
 DEPTH_COMPUTE_COST = int(os.getenv("DEPTH_COMPUTE_COST", "1"))
 PROMPT_OPTIMIZATION_COST = int(os.getenv("PROMPT_OPTIMIZATION_COST", "1"))
+REPLICATION_DIAGNOSTIC_COST = int(os.getenv("REPLICATION_DIAGNOSTIC_COST", "1"))
 DEPTH_SERVICE_BASE_URL = os.getenv("DEPTH_SERVICE_BASE_URL", "https://depth.whaios.com").rstrip("/")
 DEPTH_RESULT_RETENTION_HOURS = int(os.getenv("DEPTH_RESULT_RETENTION_HOURS", "24"))
 DEPTH_ARTIFACT_SECRET = os.getenv("DEPTH_ARTIFACT_SECRET", "").strip() or WX_APP_SECRET
@@ -87,6 +88,10 @@ class DepthRemoteRequest(BaseModel):
 class PromptOptimizationRequest(BaseModel):
     strategy: str
     platform: str = "universal"
+    idempotency_key: str = Field(min_length=12, max_length=128)
+
+
+class DiagnosticCreateRequest(BaseModel):
     idempotency_key: str = Field(min_length=12, max_length=128)
 
 
@@ -190,10 +195,27 @@ def connect() -> sqlite3.Connection:
             updated_at TEXT NOT NULL,
             UNIQUE(user_id, idempotency_key)
         );
+        CREATE TABLE IF NOT EXISTS replication_diagnostics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            original_filename TEXT,
+            generated_filename TEXT,
+            original_path TEXT,
+            generated_path TEXT,
+            cost INTEGER NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('awaiting_upload','processing','succeeded','failed')),
+            idempotency_key TEXT NOT NULL,
+            result_json TEXT,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(user_id, idempotency_key)
+        );
         CREATE INDEX IF NOT EXISTS idx_jobs_user_created ON jobs(user_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_ledger_user_created ON credit_ledger(user_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_depth_jobs_user_created ON depth_jobs(user_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_prompt_optimizations_job_created ON prompt_optimizations(job_id, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_replication_diagnostics_user_created ON replication_diagnostics(user_id, id DESC);
     """)
     try:
         db.execute("ALTER TABLE users ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0")
@@ -222,7 +244,8 @@ def recover_interrupted_jobs() -> None:
         rows = db.execute("SELECT id,user_id,cost FROM jobs WHERE status='processing'").fetchall()
         depth_rows = db.execute("SELECT id,user_id,cost FROM depth_jobs WHERE external_id IS NULL AND status IN ('submitting','waiting_service')").fetchall()
         optimization_rows = db.execute("SELECT id,user_id,cost FROM prompt_optimizations WHERE status='processing'").fetchall()
-        if not rows and not depth_rows and not optimization_rows:
+        diagnostic_rows = db.execute("SELECT id,user_id,cost FROM replication_diagnostics WHERE status IN ('awaiting_upload','processing')").fetchall()
+        if not rows and not depth_rows and not optimization_rows and not diagnostic_rows:
             return
         db.execute("BEGIN IMMEDIATE")
         for row in rows:
@@ -234,8 +257,11 @@ def recover_interrupted_jobs() -> None:
         for row in optimization_rows:
             change_credits(db, row["user_id"], row["cost"], "optimization_refund", "prompt_optimization", str(row["id"]), f"optimization:refund:{row['id']}")
             db.execute("UPDATE prompt_optimizations SET status='failed',error_message='服务重启导致优化中断，算力次数已退回',updated_at=? WHERE id=?", (utc_now().isoformat(), row["id"]))
+        for row in diagnostic_rows:
+            change_credits(db, row["user_id"], row["cost"], "diagnostic_refund", "replication_diagnostic", str(row["id"]), f"diagnostic:refund:{row['id']}")
+            db.execute("UPDATE replication_diagnostics SET status='failed',error_message='服务重启导致诊断中断，算力次数已退回',updated_at=? WHERE id=?", (utc_now().isoformat(), row["id"]))
         db.commit()
-    for directory_name in ("job-media", "depth-media"):
+    for directory_name in ("job-media", "depth-media", "diagnostic-media"):
         media_dir = Path(DATA_DIR) / directory_name
         if media_dir.exists():
             for path in media_dir.iterdir():
@@ -308,7 +334,7 @@ async def wechat_login(body: LoginRequest) -> dict[str, Any]:
         db.execute("INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)", (hash_token(token), user_id, (now + timedelta(days=SESSION_DAYS)).isoformat(), now.isoformat()))
         credits = db.execute("SELECT credits FROM users WHERE id=?", (user_id,)).fetchone()["credits"]
         db.commit()
-    return {"token": token, "expires_in": SESSION_DAYS * 86400, "user": {"id": user_id, "credits": credits, "compute_count": credits}, "pricing": {"image": IMAGE_CREDIT_COST, "video": VIDEO_CREDIT_COST, "depth": DEPTH_COMPUTE_COST, "optimization": PROMPT_OPTIMIZATION_COST}, "ad": {"reward": AD_REWARD_CREDITS, "daily_limit": AD_DAILY_LIMIT}}
+    return {"token": token, "expires_in": SESSION_DAYS * 86400, "user": {"id": user_id, "credits": credits, "compute_count": credits}, "pricing": {"image": IMAGE_CREDIT_COST, "video": VIDEO_CREDIT_COST, "depth": DEPTH_COMPUTE_COST, "optimization": PROMPT_OPTIMIZATION_COST, "diagnostic": REPLICATION_DIAGNOSTIC_COST}, "ad": {"reward": AD_REWARD_CREDITS, "daily_limit": AD_DAILY_LIMIT}}
 
 
 @commercial_router.get("/me")
@@ -316,7 +342,7 @@ async def me(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     today = utc_now().date().isoformat()
     with connect() as db:
         used = db.execute("SELECT COUNT(*) FROM reward_claims WHERE user_id=? AND status='claimed' AND substr(claimed_at,1,10)=?", (user["id"], today)).fetchone()[0]
-    return {"id": user["id"], "credits": user["credits"], "compute_count": user["credits"], "pricing": {"image": IMAGE_CREDIT_COST, "video": VIDEO_CREDIT_COST, "depth": DEPTH_COMPUTE_COST, "optimization": PROMPT_OPTIMIZATION_COST}, "ad": {"reward": AD_REWARD_CREDITS, "daily_limit": AD_DAILY_LIMIT, "remaining_today": max(0, AD_DAILY_LIMIT - used)}}
+    return {"id": user["id"], "credits": user["credits"], "compute_count": user["credits"], "pricing": {"image": IMAGE_CREDIT_COST, "video": VIDEO_CREDIT_COST, "depth": DEPTH_COMPUTE_COST, "optimization": PROMPT_OPTIMIZATION_COST, "diagnostic": REPLICATION_DIAGNOSTIC_COST}, "ad": {"reward": AD_REWARD_CREDITS, "daily_limit": AD_DAILY_LIMIT, "remaining_today": max(0, AD_DAILY_LIMIT - used)}}
 
 
 @commercial_router.post("/rewards/ad/prepare")
@@ -378,6 +404,47 @@ async def process_job(job_id: int, user_id: int, media_path: Path, filename: str
         fail_analysis_job(job_id, user_id, cost, str(getattr(exc, "detail", "分析失败，算力次数已退回")))
     finally:
         media_path.unlink(missing_ok=True)
+
+
+def diagnostic_payload(row: sqlite3.Row) -> dict[str, Any]:
+    result = json.loads(row["result_json"]) if row["result_json"] else None
+    return {
+        "id": row["id"],
+        "original_filename": row["original_filename"],
+        "generated_filename": row["generated_filename"],
+        "cost": row["cost"],
+        "status": row["status"],
+        "result": result,
+        "error_message": row["error_message"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def fail_diagnostic(diagnostic_id: int, user_id: int, cost: int, message: str) -> None:
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute("SELECT status FROM replication_diagnostics WHERE id=? AND user_id=?", (diagnostic_id, user_id)).fetchone()
+        if not row or row["status"] in {"succeeded", "failed"}:
+            db.rollback()
+            return
+        change_credits(db, user_id, cost, "diagnostic_refund", "replication_diagnostic", str(diagnostic_id), f"diagnostic:refund:{diagnostic_id}")
+        db.execute("UPDATE replication_diagnostics SET status='failed',error_message=?,updated_at=? WHERE id=?", (message[:500], utc_now().isoformat(), diagnostic_id))
+        db.commit()
+
+
+async def process_replication_diagnostic(diagnostic_id: int, user_id: int, original_path: Path, generated_path: Path, cost: int) -> None:
+    try:
+        from app.main import diagnose_video_replication
+        diagnostic = await diagnose_video_replication(str(original_path), str(generated_path))
+        with connect() as db:
+            db.execute("UPDATE replication_diagnostics SET status='succeeded',result_json=?,error_message=NULL,updated_at=? WHERE id=? AND user_id=?", (diagnostic.model_dump_json(), utc_now().isoformat(), diagnostic_id, user_id))
+    except Exception as exc:
+        logger.exception("Replication diagnostic failed: diagnostic_id=%s user_id=%s", diagnostic_id, user_id)
+        fail_diagnostic(diagnostic_id, user_id, cost, str(getattr(exc, "detail", "视频复刻诊断失败，算力次数已退回")))
+    finally:
+        original_path.unlink(missing_ok=True)
+        generated_path.unlink(missing_ok=True)
 
 
 def remote_video_content_type(path: Path) -> str:
@@ -565,6 +632,124 @@ async def create_remote_analysis_job(body: RemoteAnalysisRequest, background_tas
     with connect() as db:
         row = db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
     return job_payload(row)
+
+
+@commercial_router.post("/replication-diagnostics", status_code=202)
+async def create_replication_diagnostic(body: DiagnosticCreateRequest, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    now = utc_now().isoformat()
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        existing = db.execute("SELECT * FROM replication_diagnostics WHERE user_id=? AND idempotency_key=?", (user["id"], body.idempotency_key)).fetchone()
+        if existing:
+            db.rollback()
+            return diagnostic_payload(existing)
+        cursor = db.execute(
+            "INSERT INTO replication_diagnostics(user_id,cost,status,idempotency_key,created_at,updated_at) VALUES(?,?,?, ?,?,?)",
+            (user["id"], REPLICATION_DIAGNOSTIC_COST, "awaiting_upload", body.idempotency_key, now, now),
+        )
+        diagnostic_id = int(cursor.lastrowid)
+        change_credits(db, user["id"], -REPLICATION_DIAGNOSTIC_COST, "replication_diagnostic", "replication_diagnostic", str(diagnostic_id), f"diagnostic:charge:{diagnostic_id}")
+        db.commit()
+        row = db.execute("SELECT * FROM replication_diagnostics WHERE id=?", (diagnostic_id,)).fetchone()
+    return diagnostic_payload(row)
+
+
+async def upload_diagnostic_video(diagnostic_id: int, role: str, file: UploadFile, background_tasks: BackgroundTasks, user: dict[str, Any]) -> dict[str, Any]:
+    if role not in {"original", "generated"}:
+        raise HTTPException(status_code=400, detail="不支持的诊断视频类型")
+    with connect() as db:
+        row = db.execute("SELECT * FROM replication_diagnostics WHERE id=? AND user_id=?", (diagnostic_id, user["id"])).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="诊断任务不存在")
+    if row["status"] == "failed":
+        raise HTTPException(status_code=409, detail=row["error_message"] or "诊断任务已失败")
+    if row["status"] == "succeeded":
+        return diagnostic_payload(row)
+    try:
+        media_path, _ = await persist_job_media(file, "video", f"diagnostic-{diagnostic_id}-{role}", directory_name="diagnostic-media")
+        # Validate duration before accepting the upload so incomplete/damaged files are refunded immediately.
+        from app.main import get_video_duration
+        get_video_duration(str(media_path))
+    except Exception as exc:
+        fail_diagnostic(diagnostic_id, user["id"], row["cost"], str(getattr(exc, "detail", "诊断视频上传失败，算力次数已退回")))
+        raise
+    previous_path: Path | None = None
+    start = False
+    try:
+        with connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            current = db.execute("SELECT * FROM replication_diagnostics WHERE id=? AND user_id=?", (diagnostic_id, user["id"])).fetchone()
+            if not current or current["status"] == "failed":
+                db.rollback()
+                media_path.unlink(missing_ok=True)
+                raise HTTPException(status_code=409, detail="诊断任务已失效，算力次数已退回")
+            path_column = f"{role}_path"
+            filename_column = f"{role}_filename"
+            if current[path_column]:
+                previous_path = Path(current[path_column])
+            db.execute(
+                f"UPDATE replication_diagnostics SET {path_column}=?,{filename_column}=?,updated_at=? WHERE id=?",
+                (str(media_path), file.filename or f"{role}.mp4", utc_now().isoformat(), diagnostic_id),
+            )
+            current = db.execute("SELECT * FROM replication_diagnostics WHERE id=?", (diagnostic_id,)).fetchone()
+            if current["original_path"] and current["generated_path"]:
+                db.execute("UPDATE replication_diagnostics SET status='processing',updated_at=? WHERE id=?", (utc_now().isoformat(), diagnostic_id))
+                start = True
+            db.commit()
+            result = db.execute("SELECT * FROM replication_diagnostics WHERE id=?", (diagnostic_id,)).fetchone()
+    except Exception:
+        media_path.unlink(missing_ok=True)
+        raise
+    if previous_path and previous_path != media_path:
+        previous_path.unlink(missing_ok=True)
+    if start:
+        background_tasks.add_task(process_replication_diagnostic, diagnostic_id, user["id"], Path(result["original_path"]), Path(result["generated_path"]), result["cost"])
+    return diagnostic_payload(result)
+
+
+@commercial_router.post("/replication-diagnostics/{diagnostic_id}/original", status_code=202)
+async def upload_diagnostic_original(diagnostic_id: int, background_tasks: BackgroundTasks, file: UploadFile = File(...), user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    return await upload_diagnostic_video(diagnostic_id, "original", file, background_tasks, user)
+
+
+@commercial_router.post("/replication-diagnostics/{diagnostic_id}/generated", status_code=202)
+async def upload_diagnostic_generated(diagnostic_id: int, background_tasks: BackgroundTasks, file: UploadFile = File(...), user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    return await upload_diagnostic_video(diagnostic_id, "generated", file, background_tasks, user)
+
+
+@commercial_router.get("/replication-diagnostics")
+async def list_replication_diagnostics(user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+    with connect() as db:
+        rows = db.execute("SELECT * FROM replication_diagnostics WHERE user_id=? ORDER BY id DESC LIMIT 50", (user["id"],)).fetchall()
+    return [diagnostic_payload(row) for row in rows]
+
+
+@commercial_router.get("/replication-diagnostics/{diagnostic_id}")
+async def get_replication_diagnostic(diagnostic_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    with connect() as db:
+        row = db.execute("SELECT * FROM replication_diagnostics WHERE id=? AND user_id=?", (diagnostic_id, user["id"])).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="诊断任务不存在")
+    return diagnostic_payload(row)
+
+
+@commercial_router.post("/replication-diagnostics/{diagnostic_id}/cancel")
+async def cancel_replication_diagnostic(diagnostic_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    with connect() as db:
+        row = db.execute("SELECT * FROM replication_diagnostics WHERE id=? AND user_id=?", (diagnostic_id, user["id"])).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="诊断任务不存在")
+    if row["status"] == "processing":
+        raise HTTPException(status_code=409, detail="诊断已经开始，不能取消")
+    if row["status"] == "succeeded":
+        return diagnostic_payload(row)
+    if row["status"] != "failed":
+        fail_diagnostic(diagnostic_id, user["id"], row["cost"], "上传未完成，算力次数已退回")
+    for path_value in (row["original_path"], row["generated_path"]):
+        if path_value:
+            Path(path_value).unlink(missing_ok=True)
+    with connect() as db:
+        return diagnostic_payload(db.execute("SELECT * FROM replication_diagnostics WHERE id=?", (diagnostic_id,)).fetchone())
 
 
 def fail_depth_job(local_job_id: int, user_id: int, cost: int, message: str) -> None:
