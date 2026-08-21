@@ -50,8 +50,8 @@ function uploadJob(filePath, mode, idempotencyKey, analysisDepth = "detailed", a
   return uploadFileTask("/api/v1/jobs", filePath, { mode, analysis_depth: analysisDepth, analysis_task: analysisTask, idempotency_key: idempotencyKey });
 }
 
-function uploadDepthJob(filePath, preset, idempotencyKey) {
-  return uploadFileTask("/api/v1/depth/jobs", filePath, { preset, idempotency_key: idempotencyKey });
+function uploadDepthJob(filePath, options, idempotencyKey) {
+  return uploadFileTask("/api/v1/depth/jobs", filePath, { ...options, idempotency_key: idempotencyKey });
 }
 
 function uploadDiagnosticVideo(diagnosticId, role, filePath) {

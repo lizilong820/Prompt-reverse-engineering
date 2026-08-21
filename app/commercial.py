@@ -60,6 +60,7 @@ DEPTH_PRESET_OPTIONS: dict[str, dict[str, int | float | bool]] = {
 }
 DEPTH_WAIT_TIMEOUT_SECONDS = int(os.getenv("DEPTH_WAIT_TIMEOUT_SECONDS", "1800"))
 DEPTH_WAIT_INTERVAL_SECONDS = int(os.getenv("DEPTH_WAIT_INTERVAL_SECONDS", "8"))
+DEPTH_MAX_ARTIFACT_BYTES = int(os.getenv("DEPTH_MAX_ARTIFACT_MB", "4096")) * 1024 * 1024
 PROMPT_OPTIMIZATION_STRATEGIES = {"action", "camera", "identity", "style", "concise", "professional"}
 
 commercial_router = APIRouter(prefix="/api/v1", tags=["mini-program"])
@@ -119,6 +120,29 @@ class ProjectVersionRequest(BaseModel):
     prompt_en: str = Field(min_length=1, max_length=20000)
     source_type: str = Field(default="manual", max_length=32)
     source_id: int | None = None
+
+
+def depth_processing_options(preset: str, invert: bool, aspect_ratio: str, export_frames: bool) -> dict[str, int | float | bool | str]:
+    if preset not in DEPTH_PRESETS:
+        raise HTTPException(status_code=400, detail="不支持的深度转换模式")
+    if aspect_ratio not in {"original", "9:16", "16:9"}:
+        raise HTTPException(status_code=400, detail="输出比例不正确")
+    options: dict[str, int | float | bool | str] = {
+        "preset": preset,
+        "invert": invert,
+        "fit_mode": "contain" if aspect_ratio == "original" else "cover",
+        "export_png": export_frames,
+        "create_package": False,
+        "scene_cut_reset": True,
+        "scene_cut_threshold": 0.32,
+        **DEPTH_PRESET_OPTIONS[preset],
+    }
+    max_side = int(DEPTH_PRESET_OPTIONS[preset]["max_output_side"])
+    if aspect_ratio == "9:16":
+        options.update({"output_width": max_side // 16 * 9, "output_height": max_side})
+    elif aspect_ratio == "16:9":
+        options.update({"output_width": max_side, "output_height": max_side // 16 * 9})
+    return options
 
 
 def utc_now() -> datetime:
@@ -201,6 +225,9 @@ def connect() -> sqlite3.Connection:
             error_message TEXT,
             artifact_path TEXT,
             artifact_content_type TEXT,
+            frames_path TEXT,
+            manifest_path TEXT,
+            package_path TEXT,
             artifact_expires_at TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
@@ -281,6 +308,9 @@ def connect() -> sqlite3.Connection:
         "ALTER TABLE jobs ADD COLUMN analysis_task TEXT NOT NULL DEFAULT 'reconstruct'",
         "ALTER TABLE depth_jobs ADD COLUMN artifact_path TEXT",
         "ALTER TABLE depth_jobs ADD COLUMN artifact_content_type TEXT",
+        "ALTER TABLE depth_jobs ADD COLUMN frames_path TEXT",
+        "ALTER TABLE depth_jobs ADD COLUMN manifest_path TEXT",
+        "ALTER TABLE depth_jobs ADD COLUMN package_path TEXT",
         "ALTER TABLE depth_jobs ADD COLUMN artifact_expires_at TEXT",
     ):
         try:
@@ -845,9 +875,8 @@ def mark_depth_waiting(local_job_id: int) -> None:
         )
 
 
-async def submit_depth_upload_job(local_job_id: int, user_id: int, media_path: Path, filename: str, content_type: str, preset: str, cost: int) -> None:
+async def submit_depth_upload_job(local_job_id: int, user_id: int, media_path: Path, filename: str, content_type: str, processing_options: dict[str, int | float | bool | str], cost: int) -> None:
     try:
-        processing_options = {"preset": preset, **DEPTH_PRESET_OPTIONS[preset]}
         deadline = asyncio.get_running_loop().time() + DEPTH_WAIT_TIMEOUT_SECONDS
         async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=15.0)) as client:
             while True:
@@ -855,7 +884,7 @@ async def submit_depth_upload_job(local_job_id: int, user_id: int, media_path: P
                     response = await client.post(
                         f"{DEPTH_SERVICE_BASE_URL}/api/jobs",
                         files={"file": (filename, source, content_type)},
-                        data=processing_options,
+                        data={key: str(value).lower() if isinstance(value, bool) else str(value) for key, value in processing_options.items()},
                     )
                 payload = response.json()
                 if depth_service_busy(response, payload) and asyncio.get_running_loop().time() < deadline:
@@ -874,9 +903,9 @@ async def submit_depth_upload_job(local_job_id: int, user_id: int, media_path: P
         media_path.unlink(missing_ok=True)
 
 
-async def submit_depth_remote_job(local_job_id: int, user_id: int, url: str, preset: str, cost: int) -> None:
+async def submit_depth_remote_job(local_job_id: int, user_id: int, url: str, processing_options: dict[str, int | float | bool | str], cost: int) -> None:
     try:
-        processing_options = {"url": url, "preset": preset, **DEPTH_PRESET_OPTIONS[preset]}
+        processing_options = {"url": url, **processing_options}
         deadline = asyncio.get_running_loop().time() + DEPTH_WAIT_TIMEOUT_SECONDS
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
             while True:
@@ -919,8 +948,12 @@ def depth_result_expiration(row: sqlite3.Row) -> datetime | None:
 
 
 def depth_result_path(row: sqlite3.Row) -> Path | None:
+    return depth_artifact_path(row, "artifact_path")
+
+
+def depth_artifact_path(row: sqlite3.Row, column: str) -> Path | None:
     keys = set(row.keys())
-    raw_path = row["artifact_path"] if "artifact_path" in keys else None
+    raw_path = row[column] if column in keys else None
     if not raw_path:
         return None
     path = Path(raw_path).resolve()
@@ -938,18 +971,25 @@ def depth_result_available(row: sqlite3.Row) -> bool:
     return bool(path and path.is_file() and expiration and expiration > utc_now())
 
 
+def depth_artifact_available(row: sqlite3.Row, column: str) -> bool:
+    expiration = depth_result_expiration(row)
+    path = depth_artifact_path(row, column)
+    return bool(path and path.is_file() and expiration and expiration > utc_now())
+
+
 def cleanup_expired_depth_results() -> None:
     now = utc_now()
     with connect() as db:
-        rows = db.execute("SELECT * FROM depth_jobs WHERE artifact_path IS NOT NULL").fetchall()
+        rows = db.execute("SELECT * FROM depth_jobs WHERE artifact_path IS NOT NULL OR frames_path IS NOT NULL OR manifest_path IS NOT NULL OR package_path IS NOT NULL").fetchall()
         for row in rows:
             expiration = depth_result_expiration(row)
             if not expiration or expiration > now:
                 continue
-            path = depth_result_path(row)
-            if path:
-                path.unlink(missing_ok=True)
-            db.execute("UPDATE depth_jobs SET artifact_path=NULL,artifact_content_type=NULL WHERE id=?", (row["id"],))
+            for column in ("artifact_path", "frames_path", "manifest_path", "package_path"):
+                path = depth_artifact_path(row, column)
+                if path:
+                    path.unlink(missing_ok=True)
+            db.execute("UPDATE depth_jobs SET artifact_path=NULL,artifact_content_type=NULL,frames_path=NULL,manifest_path=NULL,package_path=NULL WHERE id=?", (row["id"],))
 
 
 async def probe_video_file(path: Path) -> dict[str, int | float]:
@@ -1008,6 +1048,30 @@ async def enhance_motion_depth_video(source_path: Path, output_path: Path) -> di
     return await probe_video_file(output_path)
 
 
+async def cache_depth_service_artifact(client: httpx.AsyncClient, external_id: str, endpoint: str, destination: Path) -> bool:
+    temporary = destination.with_suffix(destination.suffix + f".{secrets.token_hex(4)}.part")
+    try:
+        async with client.stream("GET", f"{DEPTH_SERVICE_BASE_URL}/api/jobs/{external_id}/{endpoint}") as response:
+            if response.status_code == 404:
+                return False
+            if response.is_error:
+                raise RuntimeError(f"深度{endpoint}产物下载失败: HTTP {response.status_code}")
+            size = 0
+            with temporary.open("wb") as target:
+                async for chunk in response.aiter_bytes(1024 * 1024):
+                    size += len(chunk)
+                    if size > DEPTH_MAX_ARTIFACT_BYTES:
+                        raise RuntimeError("深度产物超过下载大小上限")
+                    target.write(chunk)
+        if not temporary.exists() or not temporary.stat().st_size:
+            raise RuntimeError(f"深度{endpoint}产物为空")
+        temporary.replace(destination)
+        return True
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
 async def cache_depth_result(local_job_id: int, external_id: str) -> None:
     DEPTH_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     temporary_path = DEPTH_RESULTS_DIR / f".{local_job_id}-{secrets.token_hex(6)}.part"
@@ -1015,6 +1079,9 @@ async def cache_depth_result(local_job_id: int, external_id: str) -> None:
     content_type = "video/mp4"
     suffix = ".mp4"
     processed_metadata: dict[str, int | float] | None = None
+    frames_path = DEPTH_RESULTS_DIR / f"depth-{local_job_id}-frames.zip"
+    manifest_path = DEPTH_RESULTS_DIR / f"depth-{local_job_id}-manifest.json"
+    package_path = DEPTH_RESULTS_DIR / f"depth-{local_job_id}-package.zip"
     try:
         with connect() as db:
             row = db.execute("SELECT preset FROM depth_jobs WHERE id=?", (local_job_id,)).fetchone()
@@ -1022,6 +1089,7 @@ async def cache_depth_result(local_job_id: int, external_id: str) -> None:
             raise RuntimeError("深度任务不存在")
         preset = row["preset"]
         timeout = httpx.Timeout(None, connect=10.0)
+        remote_result: dict[str, Any] = {}
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             async with client.stream("GET", f"{DEPTH_SERVICE_BASE_URL}/api/jobs/{external_id}/download") as response:
                 if response.is_error:
@@ -1031,6 +1099,16 @@ async def cache_depth_result(local_job_id: int, external_id: str) -> None:
                 with temporary_path.open("wb") as target:
                     async for chunk in response.aiter_bytes(1024 * 1024):
                         target.write(chunk)
+            result_response = await client.get(f"{DEPTH_SERVICE_BASE_URL}/api/jobs/{external_id}")
+            if result_response.is_error:
+                raise RuntimeError(f"深度任务元数据读取失败: HTTP {result_response.status_code}")
+            remote_result = result_response.json()
+            if remote_result.get("frames_url"):
+                await cache_depth_service_artifact(client, external_id, "frames", frames_path)
+            if remote_result.get("manifest_url"):
+                await cache_depth_service_artifact(client, external_id, "manifest", manifest_path)
+            if remote_result.get("package_url"):
+                await cache_depth_service_artifact(client, external_id, "package", package_path)
         if not temporary_path.exists() or temporary_path.stat().st_size == 0:
             raise RuntimeError("深度服务返回了空视频")
         if preset == "motion_character":
@@ -1045,13 +1123,13 @@ async def cache_depth_result(local_job_id: int, external_id: str) -> None:
         expiration = now + timedelta(hours=DEPTH_RESULT_RETENTION_HOURS)
         with connect() as db:
             current = db.execute("SELECT result_json FROM depth_jobs WHERE id=?", (local_job_id,)).fetchone()
-            result = json.loads(current["result_json"]) if current and current["result_json"] else {}
+            result = {**(json.loads(current["result_json"]) if current and current["result_json"] else {}), **remote_result}
             if processed_metadata:
                 metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
                 result["metadata"] = {**metadata, **processed_metadata}
             cursor = db.execute(
-                "UPDATE depth_jobs SET status='completed',result_json=?,artifact_path=?,artifact_content_type=?,artifact_expires_at=?,updated_at=? WHERE id=?",
-                (json.dumps(result, ensure_ascii=False), str(final_path), content_type, expiration.isoformat(), now.isoformat(), local_job_id),
+                "UPDATE depth_jobs SET status='completed',result_json=?,artifact_path=?,artifact_content_type=?,frames_path=?,manifest_path=?,package_path=?,artifact_expires_at=?,updated_at=? WHERE id=?",
+                (json.dumps(result, ensure_ascii=False), str(final_path), content_type, str(frames_path) if frames_path.is_file() else None, str(manifest_path) if manifest_path.is_file() else None, str(package_path) if package_path.is_file() else None, expiration.isoformat(), now.isoformat(), local_job_id),
             )
             if cursor.rowcount != 1:
                 final_path.unlink(missing_ok=True)
@@ -1059,6 +1137,9 @@ async def cache_depth_result(local_job_id: int, external_id: str) -> None:
     except Exception:
         temporary_path.unlink(missing_ok=True)
         processed_path.unlink(missing_ok=True)
+        frames_path.unlink(missing_ok=True)
+        manifest_path.unlink(missing_ok=True)
+        package_path.unlink(missing_ok=True)
         raise
 
 
@@ -1091,17 +1172,24 @@ def depth_job_payload(row: sqlite3.Row, external: dict[str, Any] | None = None) 
         "source_platform": source.get("source_platform"), "created_at": row["created_at"],
         "available_until": expiration.isoformat() if expiration else None,
         "preview_url": None, "download_url": None,
+        "frames_url": None, "manifest_url": None, "package_url": None,
+        "options": source.get("options") or {},
     }
     if status == "completed" and available and expiration:
         payload["preview_url"] = signed_depth_artifact_url(row, "preview", expiration)
         payload["download_url"] = signed_depth_artifact_url(row, "download", expiration)
+        if depth_artifact_available(row, "frames_path"):
+            payload["frames_url"] = signed_depth_artifact_url(row, "frames", expiration)
+        if depth_artifact_available(row, "manifest_path"):
+            payload["manifest_url"] = signed_depth_artifact_url(row, "manifest", expiration)
+        if depth_artifact_available(row, "package_path"):
+            payload["package_url"] = signed_depth_artifact_url(row, "package", expiration)
     return payload
 
 
 @commercial_router.post("/depth/jobs", status_code=202)
-async def create_depth_upload_job(background_tasks: BackgroundTasks, file: UploadFile = File(...), preset: str = Form("standard_depth"), idempotency_key: str = Form(...), user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    if preset not in DEPTH_PRESETS:
-        raise HTTPException(status_code=400, detail="不支持的深度转换模式")
+async def create_depth_upload_job(background_tasks: BackgroundTasks, file: UploadFile = File(...), preset: str = Form("standard_depth"), invert: bool = Form(False), aspect_ratio: str = Form("original"), export_frames: bool = Form(False), idempotency_key: str = Form(...), user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    processing_options = depth_processing_options(preset, invert, aspect_ratio, export_frames)
     if len(idempotency_key) < 12 or len(idempotency_key) > 128:
         raise HTTPException(status_code=400, detail="幂等键格式错误")
     media_path, content_type = await persist_job_media(file, "video", f"depth-{idempotency_key}", directory_name="depth-media")
@@ -1121,15 +1209,14 @@ async def create_depth_upload_job(background_tasks: BackgroundTasks, file: Uploa
     except Exception:
         media_path.unlink(missing_ok=True)
         raise
-    background_tasks.add_task(submit_depth_upload_job, local_job_id, user["id"], media_path, file.filename or "video.mp4", content_type, preset, DEPTH_COMPUTE_COST)
+    background_tasks.add_task(submit_depth_upload_job, local_job_id, user["id"], media_path, file.filename or "video.mp4", content_type, processing_options, DEPTH_COMPUTE_COST)
     with connect() as db:
         return depth_job_payload(db.execute("SELECT * FROM depth_jobs WHERE id=?", (local_job_id,)).fetchone())
 
 
 @commercial_router.post("/depth/jobs/remote", status_code=202)
 async def create_depth_remote_job(body: DepthRemoteRequest, background_tasks: BackgroundTasks, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    if body.preset not in DEPTH_PRESETS:
-        raise HTTPException(status_code=400, detail="不支持的深度转换模式")
+    processing_options = depth_processing_options(body.preset, body.invert, body.aspect_ratio, body.export_frames)
     try:
         url = extract_url(body.url)
     except InvalidUploadError as exc:
@@ -1145,7 +1232,7 @@ async def create_depth_remote_job(body: DepthRemoteRequest, background_tasks: Ba
         local_job_id = int(cursor.lastrowid)
         change_credits(db, user["id"], -DEPTH_COMPUTE_COST, "depth_job", "depth_job", str(local_job_id), f"depth:charge:{local_job_id}")
         db.commit()
-    background_tasks.add_task(submit_depth_remote_job, local_job_id, user["id"], url, body.preset, DEPTH_COMPUTE_COST)
+    background_tasks.add_task(submit_depth_remote_job, local_job_id, user["id"], url, processing_options, DEPTH_COMPUTE_COST)
     with connect() as db:
         return depth_job_payload(db.execute("SELECT * FROM depth_jobs WHERE id=?", (local_job_id,)).fetchone())
 
@@ -1221,23 +1308,25 @@ async def get_depth_job(local_job_id: int, user: dict[str, Any] = Depends(curren
 
 
 def serve_depth_artifact(row: sqlite3.Row, artifact: str) -> FileResponse:
-    if artifact not in {"preview", "download"}:
+    if artifact not in {"preview", "download", "frames", "manifest", "package"}:
         raise HTTPException(status_code=404, detail="文件不存在")
+    column = "artifact_path" if artifact in {"preview", "download"} else f"{artifact}_path"
     expiration = depth_result_expiration(row)
     if expiration and expiration <= utc_now():
-        path = depth_result_path(row)
+        path = depth_artifact_path(row, column)
         if path:
             path.unlink(missing_ok=True)
         raise HTTPException(status_code=410, detail="深度视频已超过 24 小时保留期")
-    path = depth_result_path(row)
+    path = depth_artifact_path(row, column)
     if row["status"] != "completed" or not path or not path.is_file():
         raise HTTPException(status_code=404, detail="深度视频尚未生成")
-    disposition = "attachment" if artifact == "download" else "inline"
+    disposition = "inline" if artifact == "preview" else "attachment"
     headers = {
         "Content-Disposition": f'{disposition}; filename="depth-{row["id"]}{path.suffix}"',
         "Cache-Control": "private, max-age=300",
     }
-    return FileResponse(path, media_type=row["artifact_content_type"] or "video/mp4", headers=headers)
+    media_type = (row["artifact_content_type"] or "video/mp4") if artifact in {"preview", "download"} else {"frames": "application/zip", "manifest": "application/json", "package": "application/zip"}[artifact]
+    return FileResponse(path, media_type=media_type, headers=headers)
 
 
 @commercial_router.get("/depth/artifacts/{local_job_id}/{artifact}")

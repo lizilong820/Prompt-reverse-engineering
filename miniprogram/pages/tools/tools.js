@@ -2,7 +2,7 @@ const { api, uploadDepthJob, downloadAuthenticated } = require("../../utils/api"
 const { AD_UNIT_ID, API_BASE_URL } = require("../../config");
 const { ensurePrivacyAuthorized } = require("../../utils/privacy");
 Page({
-  data: { sourceMode: "upload", filePath: "", fileName: "", videoLink: "", preset: "standard_depth", computeCount: 0, adReward: 1, adRemaining: 20, job: null, resultVideoPath: "", previewLoading: false, submitting: false, adLoading: false }, timer: null, active: true, rewardAd: null, currentJobId: null, adFlowActive: false,
+  data: { sourceMode: "upload", filePath: "", fileName: "", videoLink: "", preset: "standard_depth", invert: false, aspectRatio: "original", exportFrames: false, computeCount: 0, adReward: 1, adRemaining: 20, job: null, resultVideoPath: "", previewLoading: false, submitting: false, adLoading: false }, timer: null, active: true, rewardAd: null, currentJobId: null, adFlowActive: false,
   onLoad() {
     this.active = true;
     if (AD_UNIT_ID && wx.createRewardedVideoAd) {
@@ -38,6 +38,9 @@ Page({
     }
     this.setData({ preset, job: null, resultVideoPath: "", previewLoading: false });
   },
+  chooseDirection(event) { this.setData({ invert: event.currentTarget.dataset.invert === "true" }); },
+  chooseAspect(event) { this.setData({ aspectRatio: event.currentTarget.dataset.ratio }); },
+  toggleFrames() { this.setData({ exportFrames: !this.data.exportFrames }); },
   onLinkInput(event) { this.setData({ videoLink: event.detail.value }); },
   async watchRewardAd() {
     if (this.adFlowActive) return;
@@ -71,7 +74,8 @@ Page({
     if (this.data.sourceMode === "upload" && !this.data.filePath) return wx.showToast({ title: "请选择视频", icon: "none" });
     if (this.data.sourceMode === "link" && !this.data.videoLink.trim()) return wx.showToast({ title: "请粘贴视频链接", icon: "none" });
     const key = Date.now() + "-" + Math.random().toString(36).slice(2) + "-depth"; this.stopPolling(); this.setData({ submitting: true, job: null, resultVideoPath: "", previewLoading: false });
-    try { const job = this.data.sourceMode === "upload" ? await uploadDepthJob(this.data.filePath, this.data.preset, key) : await api("/api/v1/depth/jobs/remote", { method: "POST", data: { url: this.data.videoLink.trim(), preset: this.data.preset, idempotency_key: key } }); this.setData({ job, computeCount: this.data.computeCount - 1 }); this.poll(job.id); }
+    const options = { preset: this.data.preset, invert: this.data.invert, aspect_ratio: this.data.aspectRatio, export_frames: this.data.exportFrames };
+    try { const job = this.data.sourceMode === "upload" ? await uploadDepthJob(this.data.filePath, options, key) : await api("/api/v1/depth/jobs/remote", { method: "POST", data: { url: this.data.videoLink.trim(), ...options, idempotency_key: key } }); this.setData({ job, computeCount: this.data.computeCount - 1 }); this.poll(job.id); }
     catch (error) { wx.showModal({ title: "提交失败", content: error.message || "任务未提交，未消耗算力次数", showCancel: false }); } finally { this.setData({ submitting: false }); }
   },
   stopPolling() { if (this.timer) clearTimeout(this.timer); this.timer = null; this.currentJobId = null; },
@@ -85,7 +89,9 @@ Page({
     const resultMeta = metadata.width && metadata.height
       ? `${metadata.width} × ${metadata.height} · ${metadata.fps || "-"} FPS · ${metadata.frames || "-"} 帧`
       : "";
-    return { ...job, resultMeta, expiresText: job.available_until ? new Date(job.available_until).toLocaleString() : "" };
+    const convention = metadata?.depth?.convention === "black_near" || job.options?.invert ? "黑近白远" : "白近黑远";
+    const usage = job.preset === "quick_preview" ? "适合快速预览与构图检查" : job.preset === "motion_character" ? "适合人物动作控制与轮廓约束" : "适合通用深度视频与稳定工作流";
+    return { ...job, resultMeta, convention, usage, expiresText: job.available_until ? new Date(job.available_until).toLocaleString() : "" };
   },
   async loadPreview(job) {
     if (!job.preview_url || this.data.resultVideoPath) return;
@@ -118,5 +124,10 @@ Page({
   async download() {
     if (!this.data.job?.download_url || !(await ensurePrivacyAuthorized())) return;
     try { const path = await downloadAuthenticated(this.data.job.download_url); await new Promise((resolve, reject) => wx.saveVideoToPhotosAlbum({ filePath: path, success: resolve, fail: reject })); wx.showToast({ title: "已保存到相册" }); } catch (error) { wx.showToast({ title: error.errMsg || error.message || "保存失败", icon: "none" }); }
+  }
+  ,async downloadArtifact(event) {
+    const kind = event.currentTarget.dataset.kind; const url = this.data.job?.[`${kind}_url`];
+    if (!url) return;
+    try { const extension = kind === "manifest" ? "json" : "zip"; const path = await downloadAuthenticated(url, extension); wx.openDocument({ filePath: path, fileType: extension, showMenu: true }); } catch (error) { wx.showToast({ title: error.message || "文件下载失败", icon: "none" }); }
   }
 });
