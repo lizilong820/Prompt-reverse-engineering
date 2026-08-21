@@ -6,6 +6,7 @@ const state = {
   tasks: [],
   feedback: [],
   upstream: [],
+  ads: [],
   taskTotal: 0,
   taskOffset: 0,
   taskLimit: 50,
@@ -82,6 +83,14 @@ function renderAnalytics(data) {
     return `<div class="trend-day" title="${escapeHtml(item.day)}：成功 ${item.succeeded}，失败 ${item.failed}"><div class="trend-bars"><span class="trend-bar" style="height:${successHeight}%"></span><span class="trend-bar failed" style="height:${failedHeight}%"></span></div><span class="trend-label">${escapeHtml(item.day.slice(5))}<br>${item.total}</span></div>`;
   }).join("");
   renderRateList("taskTypeStats", data.task_types);
+  const adToday = data.ads || {};
+  const ad24h = adToday.last_24h || {};
+  $("adStats").innerHTML = [
+    ["今日准备", adToday.prepared || 0],
+    ["今日完成", adToday.claimed || 0],
+    ["今日完成率", `${adToday.completion_rate || 0}%`],
+    ["最近24小时", `${ad24h.claimed || 0} / ${ad24h.prepared || 0}`],
+  ].map(([label, value]) => `<div class="stat-row"><span>${escapeHtml(label)}</span><div></div><strong>${escapeHtml(value)}</strong></div>`).join("");
   renderRateList("platformStats", data.platforms);
   const maxFailure = Math.max(1, ...data.failures.map((item) => item.count));
   $("failureStats").innerHTML = data.failures.length
@@ -113,6 +122,11 @@ function renderTable() {
     $("tableBody").innerHTML = state.tasks.map((task) => `<tr><td>#${task.id}</td><td><strong>${escapeHtml(task.label)}</strong><small class="table-sub">${escapeHtml(task.task_detail || "")}</small></td><td><code>${escapeHtml(task.openid)}</code></td><td>${escapeHtml(task.source_platform || task.source_type || "-")}</td><td>${statusTag(task.status)}</td><td>${task.cost}</td><td>${formatDate(task.created_at)}<small class="table-sub">${task.duration_seconds == null ? "处理中" : formatDuration(task.duration_seconds)}</small></td><td><button class="action" data-task-type="${escapeHtml(task.task_type)}" data-task-id="${task.id}">详情</button></td></tr>`).join("") || '<tr><td colspan="8">暂无任务</td></tr>';
     return;
   }
+  if (state.view === "ads") {
+    $("tableHead").innerHTML = "<tr><th>ID</th><th>用户</th><th>奖励</th><th>状态</th><th>领取时间</th><th>来源</th></tr>";
+    $("tableBody").innerHTML = state.ads.map((item) => `<tr><td>#${item.id}</td><td><code>${escapeHtml(item.openid || item.user_id)}</code></td><td><strong>+${item.amount}</strong></td><td><span class="status ok">已领取</span></td><td>${formatDate(item.created_at)}</td><td>${escapeHtml(item.reference_type || "reward_claim")}</td></tr>`).join("") || '<tr><td colspan="6">暂无广告领取记录</td></tr>';
+    return;
+  }
   if (state.view === "feedback") {
     $("tableHead").innerHTML = "<tr><th>ID</th><th>用户</th><th>关联任务</th><th>分类</th><th>内容</th><th>状态</th><th>时间</th><th></th></tr>";
     $("tableBody").innerHTML = state.feedback.map((ticket) => "<tr><td>#" + ticket.id + "</td><td><code>" + escapeHtml(ticket.openid) + "</code></td><td>" + escapeHtml(ticket.task_type) + " #" + ticket.task_id + "</td><td>" + escapeHtml(ticket.category) + "</td><td>" + escapeHtml(ticket.content) + "</td><td>" + feedbackStatusTag(ticket.status) + "</td><td>" + formatDate(ticket.created_at) + "</td><td><button class=\"action\" data-feedback=\"" + ticket.id + "\">处理</button></td></tr>").join("") || "<tr><td colspan=\"8\">暂无工单</td></tr>";
@@ -136,7 +150,9 @@ async function load() {
         ? request(`/api/admin/operations/tasks?status=${encodeURIComponent($("statusSelect").value)}&task_type=${encodeURIComponent($("taskTypeSelect").value)}&query=${encodeURIComponent($("searchInput").value)}&created_after=${encodeURIComponent(toUtcIso($("createdAfter").value))}&created_before=${encodeURIComponent(toUtcIso($("createdBefore").value))}&failure=${encodeURIComponent($("failureInput").value)}&limit=${state.taskLimit}&offset=${state.taskOffset}`)
         : state.view === "feedback"
           ? request("/api/admin/feedback?status=" + encodeURIComponent($("statusSelect").value) + "&query=" + encodeURIComponent($("searchInput").value) + "&limit=" + state.taskLimit + "&offset=" + state.taskOffset)
-        : state.view === "upstream"
+          : state.view === "ads"
+            ? request("/api/admin/audit/credits?kind=ad&query=" + encodeURIComponent($("searchInput").value) + "&limit=" + state.taskLimit + "&offset=" + state.taskOffset)
+          : state.view === "upstream"
           ? request("/api/admin/monitoring/upstream")
         : request(`/api/admin/jobs?status=${encodeURIComponent($("statusSelect").value)}`);
     const [overview, analytics, list] = await Promise.all([request("/api/admin/overview"), request("/api/admin/analytics"), listRequest]);
@@ -144,6 +160,7 @@ async function load() {
     renderAnalytics(analytics);
     if (state.view === "users") state.users = list;
     else if (state.view === "operations") { state.tasks = list.items || []; state.taskTotal = list.total || 0; renderPagination(); }
+    else if (state.view === "ads") { state.ads = list.items || []; state.taskTotal = list.total || 0; renderPagination(); }
     else if (state.view === "feedback") { state.feedback = list.items || []; state.taskTotal = list.total || 0; renderPagination(); }
     else if (state.view === "upstream") { state.upstream = list.services || []; renderPagination(); }
     else state.jobs = list;
@@ -157,7 +174,7 @@ async function load() {
 }
 
 function renderPagination() {
-  const visible = state.view === "operations" || state.view === "feedback";
+  const visible = state.view === "operations" || state.view === "feedback" || state.view === "ads";
   $("pagination").hidden = !visible;
   if (!visible) return;
   const start = state.taskTotal ? state.taskOffset + 1 : 0;
@@ -256,12 +273,12 @@ document.addEventListener("DOMContentLoaded", () => {
     state.view = button.dataset.view;
     state.taskOffset = 0;
     $("taskTypeSelect").hidden = state.view !== "operations";
-    $("statusSelect").hidden = state.view === "users";
+    $("statusSelect").hidden = state.view === "users" || state.view === "ads" || state.view === "upstream";
     $("createdAfter").hidden = state.view !== "operations";
     $("createdBefore").hidden = state.view !== "operations";
     $("failureInput").hidden = state.view !== "operations";
     $("pagination").hidden = state.view !== "operations" && state.view !== "feedback";
-    $("searchInput").placeholder = state.view === "operations" ? "搜索任务 ID / 用户 / 文件名" : state.view === "feedback" ? "搜索工单 / 用户 / 内容" : "搜索用户 ID / openid";
+    $("searchInput").placeholder = state.view === "operations" ? "搜索任务 ID / 用户 / 文件名" : state.view === "feedback" ? "搜索工单 / 用户 / 内容" : state.view === "ads" ? "搜索广告记录 / 用户 / reference_id" : "搜索用户 ID / openid";
     document.querySelectorAll(".tab").forEach((item) => item.classList.toggle("active", item === button));
     load();
   }));
