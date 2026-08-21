@@ -234,12 +234,14 @@ async def overview(_: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
 
 @admin_router.get("/analytics")
 async def analytics(_: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
+    now = utc_now()
     today_start, tomorrow_start = report_day_bounds()
     yesterday_start, _ = report_day_bounds(-1)
     seven_day_start, _ = report_day_bounds(-6)
     today = (today_start.isoformat(), tomorrow_start.isoformat())
     yesterday = (yesterday_start.isoformat(), today_start.isoformat())
     seven_days = (seven_day_start.isoformat(), tomorrow_start.isoformat())
+    last_24h = ((now - timedelta(hours=24)).isoformat(), now.isoformat())
 
     with connect() as db:
         new_users_today = db.execute("SELECT COUNT(*) FROM users WHERE created_at>=? AND created_at<?", today).fetchone()[0]
@@ -258,6 +260,22 @@ async def analytics(_: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
                 FROM tasks WHERE created_at>=? AND created_at<?
             """,
             today,
+        ).fetchone()
+        last_24h_summary = db.execute(
+            TASKS_CTE + """
+                SELECT COUNT(*) AS total,
+                    COALESCE(SUM(CASE WHEN status='succeeded' THEN 1 ELSE 0 END),0) AS succeeded,
+                    COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END),0) AS failed,
+                    COALESCE(SUM(CASE WHEN status='processing' THEN 1 ELSE 0 END),0) AS processing,
+                    COALESCE(ROUND(AVG(CASE WHEN status IN ('succeeded','failed')
+                        THEN (julianday(updated_at)-julianday(created_at))*86400 END)),0) AS avg_duration_seconds
+                FROM tasks WHERE created_at>=? AND created_at<?
+            """,
+            last_24h,
+        ).fetchone()
+        seven_day_summary = db.execute(
+            TASKS_CTE + "SELECT COUNT(*) AS total FROM tasks WHERE created_at>=? AND created_at<?",
+            seven_days,
         ).fetchone()
         task_types = db.execute(
             TASKS_CTE + """
@@ -311,6 +329,15 @@ async def analytics(_: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
             """,
             today,
         ).fetchone()
+        ad_24h_summary = db.execute(
+            """
+                SELECT COUNT(*) AS prepared,
+                    COALESCE(SUM(CASE WHEN status='claimed' THEN 1 ELSE 0 END),0) AS claimed,
+                    COALESCE(SUM(CASE WHEN status='expired' THEN 1 ELSE 0 END),0) AS expired
+                FROM reward_claims WHERE created_at>=? AND created_at<?
+            """,
+            last_24h,
+        ).fetchone()
         credit_summary = db.execute(
             """
                 SELECT COALESCE(SUM(CASE WHEN amount<0 THEN -amount ELSE 0 END),0) AS consumed,
@@ -319,6 +346,15 @@ async def analytics(_: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
                 FROM credit_ledger WHERE created_at>=? AND created_at<?
             """,
             today,
+        ).fetchone()
+        credit_24h_summary = db.execute(
+            """
+                SELECT COALESCE(SUM(CASE WHEN amount<0 THEN -amount ELSE 0 END),0) AS consumed,
+                    COALESCE(SUM(CASE WHEN amount>0 AND reason LIKE '%refund%' THEN amount ELSE 0 END),0) AS refunded,
+                    COALESCE(SUM(CASE WHEN amount>0 AND reason LIKE '%refund%' THEN 1 ELSE 0 END),0) AS refund_count
+                FROM credit_ledger WHERE created_at>=? AND created_at<?
+            """,
+            last_24h,
         ).fetchone()
         stale_analysis = db.execute(
             "SELECT COUNT(*) FROM jobs WHERE status='processing' AND updated_at<?",
@@ -330,7 +366,10 @@ async def analytics(_: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
         ).fetchone()[0]
 
     summary = row_dict(today_summary)
+    last_24h_metrics = row_dict(last_24h_summary)
+    last_7d_metrics = row_dict(seven_day_summary)
     summary["success_rate"] = round(summary["succeeded"] * 100 / summary["total"], 1) if summary["total"] else 0
+    last_24h_metrics["success_rate"] = round(last_24h_metrics["succeeded"] * 100 / last_24h_metrics["total"], 1) if last_24h_metrics["total"] else 0
     type_labels = {"image": "图片反推", "video": "视频反推", "depth": "深度转换", "optimization": "提示词优化", "diagnostic": "视频复刻诊断"}
     type_metrics = []
     for row in task_types:
@@ -362,6 +401,8 @@ async def analytics(_: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
 
     ads = row_dict(ad_summary)
     ads["completion_rate"] = round(ads["claimed"] * 100 / ads["prepared"], 1) if ads["prepared"] else 0
+    ads_24h = row_dict(ad_24h_summary)
+    ads_24h["completion_rate"] = round(ads_24h["claimed"] * 100 / ads_24h["prepared"], 1) if ads_24h["prepared"] else 0
     alerts: list[dict[str, str]] = []
     if summary["total"] >= 5 and summary["failed"] / summary["total"] > 0.2:
         alerts.append({"severity": "critical", "title": "今日任务失败率偏高", "detail": f"失败 {summary['failed']} / {summary['total']}，失败率 {round(summary['failed'] * 100 / summary['total'], 1)}%"})
@@ -382,12 +423,19 @@ async def analytics(_: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
         alerts.append({"severity": "warning", "title": "激励广告完成率偏低", "detail": f"今日完成率 {ads['completion_rate']}%，准备 {ads['prepared']} 次"})
 
     return {
-        "generated_at": utc_now().isoformat(),
+        "generated_at": now.isoformat(),
         "timezone": str(REPORT_TIMEZONE),
+        "periods": {
+            "today": {"start": today_start.isoformat(), "end": tomorrow_start.isoformat(), "local_date": today_start.astimezone(REPORT_TIMEZONE).date().isoformat()},
+            "last_24h": {"start": last_24h[0], "end": last_24h[1]},
+            "last_7d": {"start": seven_day_start.isoformat(), "end": tomorrow_start.isoformat()},
+        },
         "users": {"new_today": new_users_today, "new_yesterday": new_users_yesterday, "active_today": active_users_today},
         "today": summary,
-        "credits": row_dict(credit_summary),
-        "ads": ads,
+        "last_24h": last_24h_metrics,
+        "last_7d": last_7d_metrics,
+        "credits": {**row_dict(credit_summary), "last_24h": row_dict(credit_24h_summary)},
+        "ads": {**ads, "last_24h": ads_24h},
         "task_types": type_metrics,
         "trend": trend,
         "failures": failures,

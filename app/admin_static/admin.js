@@ -45,13 +45,16 @@ async function request(path, options = {}) {
 }
 
 function renderMetrics(overview, analytics) {
+  const todayDate = analytics.periods?.today?.local_date || "今日";
+  const last24hTotal = analytics.last_24h?.total || 0;
+  const last7dTotal = analytics.last_7d?.total || 0;
   const items = [
-    ["用户总数", overview.users, `今日新增 ${analytics.users.new_today}`],
+    ["用户总数", overview.users, `${todayDate} 新增 ${analytics.users.new_today}`],
     ["今日活跃", analytics.users.active_today, `昨日新增 ${analytics.users.new_yesterday}`],
-    ["今日任务", analytics.today.total, `处理中 ${analytics.today.processing}`],
-    ["今日成功率", `${analytics.today.success_rate}%`, `失败 ${analytics.today.failed}`],
-    ["平均处理耗时", formatDuration(analytics.today.avg_duration_seconds), "已结束任务"],
-    ["今日算力消耗", analytics.credits.consumed, `退款 ${analytics.credits.refunded}`],
+    ["今日任务", analytics.today.total, `最近24小时 ${last24hTotal} · 近7日 ${last7dTotal}`],
+    ["今日成功率", `${analytics.today.success_rate}%`, `失败 ${analytics.today.failed} · 24小时 ${analytics.last_24h?.success_rate || 0}%`],
+    ["平均处理耗时", formatDuration(analytics.today.avg_duration_seconds), `今日已结束 · 24小时 ${formatDuration(analytics.last_24h?.avg_duration_seconds)}`],
+    ["今日算力消耗", analytics.credits.consumed, `退款 ${analytics.credits.refunded} · 24小时 ${analytics.credits.last_24h?.consumed || 0}`],
   ];
   $("metrics").innerHTML = items.map(([label, value, detail]) => `<div class="metric"><label>${escapeHtml(label)}</label><strong>${escapeHtml(value)}</strong><small>${escapeHtml(detail)}</small></div>`).join("");
 }
@@ -70,7 +73,8 @@ function renderRateList(targetId, items) {
 
 function renderAnalytics(data) {
   $("analyticsPanel").hidden = false;
-  $("analyticsGenerated").textContent = `更新于 ${formatDate(data.generated_at)}`;
+  const localDate = data.periods?.today?.local_date || "";
+  $("analyticsGenerated").textContent = `统计日 ${localDate}（${data.timezone || "本地时区"}） · 更新于 ${formatDate(data.generated_at)}`;
   const maxTotal = Math.max(1, ...data.trend.map((item) => item.total));
   $("trendChart").innerHTML = data.trend.map((item) => {
     const successHeight = Math.max(item.succeeded ? 4 : 2, item.succeeded * 100 / maxTotal);
