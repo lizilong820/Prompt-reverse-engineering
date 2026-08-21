@@ -401,6 +401,38 @@ async def config_status(_: dict[str, str] = Depends(admin_user)) -> dict[str, An
     }
 
 
+@admin_router.get("/monitoring/upstream")
+async def upstream_monitoring(_: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
+    start, end = report_day_bounds(-6)
+    services = {
+        "vision": ("Vision API", "error_message LIKE '%Vision%' OR error_message LIKE '%OpenAI%' OR error_message LIKE '%模型%'"),
+        "video_parser": ("视频链接解析", "source_type='remote'"),
+        "depth": ("深度服务", "task_type='depth'"),
+        "content_security": ("内容安全", "error_message LIKE '%内容安全%' OR error_message LIKE '%违规%'"),
+    }
+    with connect() as db:
+        task_rows = db.execute(TASKS_CTE + "SELECT task_type,status,cost,error_message,created_at,updated_at,source_type FROM tasks WHERE created_at>=? AND created_at<?", (start.isoformat(), end.isoformat())).fetchall()
+    result = []
+    for key, (label, condition) in services.items():
+        selected = []
+        for row in task_rows:
+            text = (row["error_message"] or "") + " " + (row["source_type"] or "") + " " + row["task_type"]
+            if key == "vision" and any(token in text.lower() for token in ("vision", "openai", "模型", "额度", "api key")):
+                selected.append(row)
+            elif key == "video_parser" and row["source_type"] == "remote":
+                selected.append(row)
+            elif key == "depth" and row["task_type"] == "depth":
+                selected.append(row)
+            elif key == "content_security" and any(token in text for token in ("内容安全", "违规", "security")):
+                selected.append(row)
+        total = len(selected)
+        failed = sum(1 for row in selected if row["status"] == "failed")
+        durations = [(datetime.fromisoformat(row["updated_at"]) - datetime.fromisoformat(row["created_at"])).total_seconds() for row in selected if row["status"] in {"succeeded", "failed"}]
+        rate = round((total - failed) * 100 / total, 1) if total else 100.0
+        result.append({"key": key, "label": label, "requests": total, "failed": failed, "success_rate": rate, "avg_duration_seconds": round(sum(durations) / len(durations), 1) if durations else 0, "status": "degraded" if rate < 80 else "healthy", "recommendation": "启用熔断并检查上游额度" if rate < 80 else "运行正常"})
+    return {"window": {"from": start.isoformat(), "to": end.isoformat()}, "services": result, "generated_at": utc_now().isoformat()}
+
+
 @admin_router.get("/users")
 async def users(query: str = "", limit: int = 50, _: dict[str, str] = Depends(admin_user)) -> list[dict[str, Any]]:
     limit = max(1, min(limit, 100))

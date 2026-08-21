@@ -5,6 +5,7 @@ const state = {
   jobs: [],
   tasks: [],
   feedback: [],
+  upstream: [],
   taskTotal: 0,
   taskOffset: 0,
   taskLimit: 50,
@@ -113,6 +114,11 @@ function renderTable() {
     $("tableBody").innerHTML = state.feedback.map((ticket) => "<tr><td>#" + ticket.id + "</td><td><code>" + escapeHtml(ticket.openid) + "</code></td><td>" + escapeHtml(ticket.task_type) + " #" + ticket.task_id + "</td><td>" + escapeHtml(ticket.category) + "</td><td>" + escapeHtml(ticket.content) + "</td><td>" + feedbackStatusTag(ticket.status) + "</td><td>" + formatDate(ticket.created_at) + "</td><td><button class=\"action\" data-feedback=\"" + ticket.id + "\">处理</button></td></tr>").join("") || "<tr><td colspan=\"8\">暂无工单</td></tr>";
     return;
   }
+  if (state.view === "upstream") {
+    $("tableHead").innerHTML = "<tr><th>服务</th><th>请求量</th><th>失败</th><th>成功率</th><th>平均耗时</th><th>状态</th><th>建议</th></tr>";
+    $("tableBody").innerHTML = state.upstream.map((item) => "<tr><td><strong>" + escapeHtml(item.label) + "</strong></td><td>" + item.requests + "</td><td>" + item.failed + "</td><td>" + item.success_rate + "%</td><td>" + formatDuration(item.avg_duration_seconds) + "</td><td>" + (item.status === "healthy" ? '<span class="status ok">正常</span>' : '<span class="status bad">异常</span>') + "</td><td>" + escapeHtml(item.recommendation) + "</td></tr>").join("") || "<tr><td colspan=\"7\">暂无监控数据</td></tr>";
+    return;
+  }
   $("tableHead").innerHTML = "<tr><th>ID</th><th>用户</th><th>媒体</th><th>状态</th><th>算力</th><th>时间</th><th></th></tr>";
   $("tableBody").innerHTML = state.jobs.map((job) => `<tr><td>#${job.id}</td><td><code>${escapeHtml(job.openid)}</code></td><td>${job.mode === "video" ? "视频" : "图片"}</td><td>${statusTag(job.status)}</td><td>${job.cost}</td><td>${formatDate(job.created_at)}</td><td>${job.status === "succeeded" ? `<button class="action" data-refund="${job.id}">退款</button>` : ""}</td></tr>`).join("") || '<tr><td colspan="7">暂无任务</td></tr>';
 }
@@ -126,6 +132,8 @@ async function load() {
         ? request(`/api/admin/operations/tasks?status=${encodeURIComponent($("statusSelect").value)}&task_type=${encodeURIComponent($("taskTypeSelect").value)}&query=${encodeURIComponent($("searchInput").value)}&created_after=${encodeURIComponent(toUtcIso($("createdAfter").value))}&created_before=${encodeURIComponent(toUtcIso($("createdBefore").value))}&failure=${encodeURIComponent($("failureInput").value)}&limit=${state.taskLimit}&offset=${state.taskOffset}`)
         : state.view === "feedback"
           ? request("/api/admin/feedback?status=" + encodeURIComponent($("statusSelect").value) + "&query=" + encodeURIComponent($("searchInput").value) + "&limit=" + state.taskLimit + "&offset=" + state.taskOffset)
+        : state.view === "upstream"
+          ? request("/api/admin/monitoring/upstream")
         : request(`/api/admin/jobs?status=${encodeURIComponent($("statusSelect").value)}`);
     const [overview, analytics, list] = await Promise.all([request("/api/admin/overview"), request("/api/admin/analytics"), listRequest]);
     renderMetrics(overview, analytics);
@@ -133,6 +141,7 @@ async function load() {
     if (state.view === "users") state.users = list;
     else if (state.view === "operations") { state.tasks = list.items || []; state.taskTotal = list.total || 0; renderPagination(); }
     else if (state.view === "feedback") { state.feedback = list.items || []; state.taskTotal = list.total || 0; renderPagination(); }
+    else if (state.view === "upstream") { state.upstream = list.services || []; renderPagination(); }
     else state.jobs = list;
     renderTable();
   } catch (error) {
