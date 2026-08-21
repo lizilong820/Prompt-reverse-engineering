@@ -11,6 +11,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.commercial import AD_DAILY_LIMIT, IMAGE_CREDIT_COST, VIDEO_CREDIT_COST, change_credits, connect, hash_token, utc_now
@@ -55,6 +56,21 @@ class FeedbackUpdate(BaseModel):
     admin_tags: str = Field(default="", max_length=300)
     admin_note: str = Field(default="", max_length=2000)
     reply: str = Field(default="", max_length=2000)
+    reason: str = Field(min_length=2, max_length=200)
+
+
+class RuntimeSettingUpdate(BaseModel):
+    value: str = Field(max_length=2000)
+    reason: str = Field(min_length=2, max_length=200)
+
+
+class AnnouncementInput(BaseModel):
+    title: str = Field(min_length=1, max_length=100)
+    content: str = Field(min_length=1, max_length=5000)
+    status: str = Field(pattern="^(draft|published|offline)$")
+    starts_at: str | None = None
+    ends_at: str | None = None
+    min_version: str = Field(default="", max_length=40)
     reason: str = Field(min_length=2, max_length=200)
 
 
@@ -174,7 +190,7 @@ def task_result_preview(raw: str | None) -> Any:
 def write_audit_log(db: Any, admin: dict[str, str], action: str, target_type: str, target_id: int, user_id: int, reason: str, metadata: dict[str, Any] | None = None) -> None:
     db.execute(
         "INSERT INTO admin_audit_logs(admin_username,action,target_type,target_id,user_id,reason,metadata_json,created_at) VALUES(?,?,?,?,?,?,?,?)",
-        (admin["username"], action, target_type, str(target_id), user_id, reason, json.dumps(metadata or {}, ensure_ascii=False), utc_now().isoformat()),
+        (admin["username"], action, target_type, str(target_id), user_id or None, reason, json.dumps(metadata or {}, ensure_ascii=False), utc_now().isoformat()),
     )
 
 
@@ -431,6 +447,92 @@ async def upstream_monitoring(_: dict[str, str] = Depends(admin_user)) -> dict[s
         rate = round((total - failed) * 100 / total, 1) if total else 100.0
         result.append({"key": key, "label": label, "requests": total, "failed": failed, "success_rate": rate, "avg_duration_seconds": round(sum(durations) / len(durations), 1) if durations else 0, "status": "degraded" if rate < 80 else "healthy", "recommendation": "启用熔断并检查上游额度" if rate < 80 else "运行正常"})
     return {"window": {"from": start.isoformat(), "to": end.isoformat()}, "services": result, "generated_at": utc_now().isoformat()}
+
+
+@admin_router.get("/audit/credits")
+async def credit_audit(query: str = "", kind: str = "", limit: int = 100, offset: int = 0, export: bool = False, _: dict[str, str] = Depends(admin_user)) -> Any:
+    if kind and kind not in {"credit", "ad"}:
+        raise HTTPException(status_code=400, detail="不支持的审计类型")
+    limit = max(1, min(limit, 500))
+    offset = max(0, min(offset, 100000))
+    clauses = []
+    params: list[Any] = []
+    if kind == "credit":
+        clauses.append("source='credit'")
+    elif kind == "ad":
+        clauses.append("source='ad'")
+    if query.strip():
+        pattern = "%" + query.strip() + "%"
+        clauses.append("(CAST(user_id AS TEXT) LIKE ? OR openid LIKE ? OR reason LIKE ? OR CAST(reference_id AS TEXT) LIKE ?)")
+        params.extend([pattern, pattern, pattern, pattern])
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
+    with connect() as db:
+        db.execute("CREATE TEMP VIEW IF NOT EXISTS audit_rows AS SELECT l.id,l.user_id,u.openid,l.amount,l.balance_after,l.reason,l.reference_type,l.reference_id,l.created_at,'credit' AS source FROM credit_ledger l JOIN users u ON u.id=l.user_id UNION ALL SELECT r.id,r.user_id,u.openid,1,u.credits,'激励广告领取', 'reward_claim',r.id,r.claimed_at,'ad' FROM reward_claims r JOIN users u ON u.id=r.user_id WHERE r.status='claimed'")
+        total = db.execute("SELECT COUNT(*) FROM audit_rows" + where, params).fetchone()[0]
+        rows = db.execute("SELECT * FROM audit_rows" + where + " ORDER BY created_at DESC LIMIT ? OFFSET ?", [*params, limit, offset]).fetchall()
+    items = []
+    for row in rows:
+        item = row_dict(row)
+        item["anomaly"] = bool(item["source"] == "ad" and item["created_at"] is None)
+        items.append(item)
+    if export:
+        lines = ["id,user_id,openid,amount,balance_after,reason,reference_type,reference_id,created_at,source,anomaly"]
+        for item in items:
+            lines.append(",".join('"' + str(item.get(key, "")).replace('"', '""') + '"' for key in ("id","user_id","openid","amount","balance_after","reason","reference_type","reference_id","created_at","source","anomaly")))
+        return Response(content="\\n".join(lines), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=credit-audit.csv"})
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@admin_router.get("/content/settings")
+async def content_settings(_: dict[str, str] = Depends(admin_user)) -> list[dict[str, Any]]:
+    with connect() as db:
+        rows = db.execute("SELECT setting_key,setting_value,updated_at,updated_by FROM runtime_settings ORDER BY setting_key").fetchall()
+    return [row_dict(row) for row in rows]
+
+
+@admin_router.put("/content/settings/{setting_key}")
+async def update_content_setting(setting_key: str, body: RuntimeSettingUpdate, admin: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
+    now = utc_now().isoformat()
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        db.execute("INSERT INTO runtime_settings(setting_key,setting_value,updated_at,updated_by) VALUES(?,?,?,?) ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value,updated_at=excluded.updated_at,updated_by=excluded.updated_by", (setting_key, body.value, now, admin["username"]))
+        write_audit_log(db, admin, "setting_update", "runtime_setting", 0, 0, body.reason, {"setting_key": setting_key})
+        db.commit()
+    return {"setting_key": setting_key, "setting_value": body.value, "updated_at": now}
+
+
+@admin_router.get("/content/announcements")
+async def list_announcements(_: dict[str, str] = Depends(admin_user)) -> list[dict[str, Any]]:
+    with connect() as db:
+        rows = db.execute("SELECT * FROM announcements ORDER BY id DESC LIMIT 100").fetchall()
+    return [row_dict(row) for row in rows]
+
+
+@admin_router.post("/content/announcements", status_code=201)
+async def create_announcement(body: AnnouncementInput, admin: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
+    now = utc_now().isoformat()
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        announcement_id = db.execute("INSERT INTO announcements(title,content,status,starts_at,ends_at,min_version,created_at,updated_at,updated_by) VALUES(?,?,?,?,?,?,?,?,?)", (body.title.strip(), body.content.strip(), body.status, body.starts_at, body.ends_at, body.min_version.strip(), now, now, admin["username"])).lastrowid
+        write_audit_log(db, admin, "announcement_create", "announcement", announcement_id, 0, body.reason)
+        db.commit()
+        row = db.execute("SELECT * FROM announcements WHERE id=?", (announcement_id,)).fetchone()
+    return row_dict(row)
+
+
+@admin_router.patch("/content/announcements/{announcement_id}")
+async def update_announcement(announcement_id: int, body: AnnouncementInput, admin: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
+    now = utc_now().isoformat()
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        current = db.execute("SELECT id FROM announcements WHERE id=?", (announcement_id,)).fetchone()
+        if not current:
+            raise HTTPException(status_code=404, detail="公告不存在")
+        db.execute("UPDATE announcements SET title=?,content=?,status=?,starts_at=?,ends_at=?,min_version=?,updated_at=?,updated_by=? WHERE id=?", (body.title.strip(), body.content.strip(), body.status, body.starts_at, body.ends_at, body.min_version.strip(), now, admin["username"], announcement_id))
+        write_audit_log(db, admin, "announcement_update", "announcement", announcement_id, 0, body.reason, {"status": body.status})
+        db.commit()
+        row = db.execute("SELECT * FROM announcements WHERE id=?", (announcement_id,)).fetchone()
+    return row_dict(row)
 
 
 @admin_router.get("/users")

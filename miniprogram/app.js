@@ -2,8 +2,9 @@ const { api } = require("./utils/api");
 const { DEVELOPMENT } = require("./config");
 
 App({
-  globalData: { user: null, pricing: { image: 1, video: 3 }, ad: null },
+  globalData: { user: null, pricing: { image: 1, video: 3 }, ad: null, runtimeConfig: null },
   async onLaunch() {
+    try { this.globalData.runtimeConfig = await api("/api/v1/runtime-config", { auth: false }); } catch (error) { console.error("runtime config failed", error); }
     try { await this.ensureLogin(); } catch (error) { console.error("login failed", error); }
   },
   async ensureLogin() {

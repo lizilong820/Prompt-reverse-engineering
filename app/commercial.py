@@ -322,6 +322,24 @@ def connect() -> sqlite3.Connection:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS runtime_settings (
+            setting_key TEXT PRIMARY KEY,
+            setting_value TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            updated_by TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS announcements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','published','offline')),
+            starts_at TEXT,
+            ends_at TEXT,
+            min_version TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            updated_by TEXT NOT NULL DEFAULT ''
+        );
         CREATE INDEX IF NOT EXISTS idx_jobs_user_created ON jobs(user_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_ledger_user_created ON credit_ledger(user_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_depth_jobs_user_created ON depth_jobs(user_id, id DESC);
@@ -333,6 +351,7 @@ def connect() -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_project_versions_project_created ON project_versions(project_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_feedback_user_created ON feedback_tickets(user_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_feedback_status_created ON feedback_tickets(status, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_announcements_status_time ON announcements(status, starts_at, ends_at);
     """)
     try:
         db.execute("ALTER TABLE users ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0")
@@ -1536,6 +1555,15 @@ async def list_feedback(user: dict[str, Any] = Depends(current_user)) -> list[di
             (user["id"],),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+@commercial_router.get("/runtime-config")
+async def runtime_config() -> dict[str, Any]:
+    now = utc_now().isoformat()
+    with connect() as db:
+        settings = {row["setting_key"]: row["setting_value"] for row in db.execute("SELECT setting_key,setting_value FROM runtime_settings").fetchall()}
+        announcements = db.execute("SELECT id,title,content,min_version,starts_at,ends_at FROM announcements WHERE status='published' AND (starts_at IS NULL OR starts_at<=?) AND (ends_at IS NULL OR ends_at>=?) ORDER BY id DESC LIMIT 10", (now, now)).fetchall()
+    return {"settings": settings, "announcements": [dict(row) for row in announcements]}
 
 
 @commercial_router.post("/projects", status_code=201)
