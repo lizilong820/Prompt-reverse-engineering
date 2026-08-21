@@ -264,6 +264,17 @@ def connect() -> sqlite3.Connection:
             updated_at TEXT NOT NULL,
             UNIQUE(user_id, idempotency_key)
         );
+        CREATE TABLE IF NOT EXISTS admin_audit_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            admin_username TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target_type TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            user_id INTEGER REFERENCES users(id),
+            reason TEXT NOT NULL DEFAULT '',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS creative_projects (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL REFERENCES users(id),
@@ -293,6 +304,8 @@ def connect() -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_depth_jobs_user_created ON depth_jobs(user_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_prompt_optimizations_job_created ON prompt_optimizations(job_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_replication_diagnostics_user_created ON replication_diagnostics(user_id, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_admin_audit_target_created ON admin_audit_logs(target_type, target_id, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_admin_audit_user_created ON admin_audit_logs(user_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_creative_projects_user_updated ON creative_projects(user_id, is_favorite DESC, updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_project_versions_project_created ON project_versions(project_id, id DESC);
     """)

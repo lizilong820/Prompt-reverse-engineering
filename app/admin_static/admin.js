@@ -3,6 +3,10 @@ const state = {
   view: "users",
   users: [],
   jobs: [],
+  tasks: [],
+  taskTotal: 0,
+  taskOffset: 0,
+  taskLimit: 50,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -98,6 +102,11 @@ function renderTable() {
     $("tableBody").innerHTML = state.users.map((user) => `<tr><td>#${user.id}</td><td><code>${escapeHtml(user.openid)}</code></td><td><strong>${user.credits}</strong></td><td>${user.is_blocked ? '<span class="status bad">已封禁</span>' : '<span class="status ok">正常</span>'}</td><td>${formatDate(user.created_at)}</td><td><button class="action" data-user="${user.id}">查看</button></td></tr>`).join("") || '<tr><td colspan="6">暂无用户</td></tr>';
     return;
   }
+  if (state.view === "operations") {
+    $("tableHead").innerHTML = "<tr><th>ID</th><th>类型</th><th>用户</th><th>来源</th><th>状态</th><th>算力</th><th>时间</th><th></th></tr>";
+    $("tableBody").innerHTML = state.tasks.map((task) => `<tr><td>#${task.id}</td><td><strong>${escapeHtml(task.label)}</strong><small class="table-sub">${escapeHtml(task.task_detail || "")}</small></td><td><code>${escapeHtml(task.openid)}</code></td><td>${escapeHtml(task.source_platform || task.source_type || "-")}</td><td>${statusTag(task.status)}</td><td>${task.cost}</td><td>${formatDate(task.created_at)}<small class="table-sub">${task.duration_seconds == null ? "处理中" : formatDuration(task.duration_seconds)}</small></td><td><button class="action" data-task-type="${escapeHtml(task.task_type)}" data-task-id="${task.id}">详情</button></td></tr>`).join("") || '<tr><td colspan="8">暂无任务</td></tr>';
+    return;
+  }
   $("tableHead").innerHTML = "<tr><th>ID</th><th>用户</th><th>媒体</th><th>状态</th><th>算力</th><th>时间</th><th></th></tr>";
   $("tableBody").innerHTML = state.jobs.map((job) => `<tr><td>#${job.id}</td><td><code>${escapeHtml(job.openid)}</code></td><td>${job.mode === "video" ? "视频" : "图片"}</td><td>${statusTag(job.status)}</td><td>${job.cost}</td><td>${formatDate(job.created_at)}</td><td>${job.status === "succeeded" ? `<button class="action" data-refund="${job.id}">退款</button>` : ""}</td></tr>`).join("") || '<tr><td colspan="7">暂无任务</td></tr>';
 }
@@ -107,11 +116,14 @@ async function load() {
     $("refreshButton").disabled = true;
     const listRequest = state.view === "users"
       ? request(`/api/admin/users?query=${encodeURIComponent($("searchInput").value)}`)
-      : request(`/api/admin/jobs?status=${encodeURIComponent($("statusSelect").value)}`);
+      : state.view === "operations"
+        ? request(`/api/admin/operations/tasks?status=${encodeURIComponent($("statusSelect").value)}&task_type=${encodeURIComponent($("taskTypeSelect").value)}&query=${encodeURIComponent($("searchInput").value)}&created_after=${encodeURIComponent(toUtcIso($("createdAfter").value))}&created_before=${encodeURIComponent(toUtcIso($("createdBefore").value))}&failure=${encodeURIComponent($("failureInput").value)}&limit=${state.taskLimit}&offset=${state.taskOffset}`)
+        : request(`/api/admin/jobs?status=${encodeURIComponent($("statusSelect").value)}`);
     const [overview, analytics, list] = await Promise.all([request("/api/admin/overview"), request("/api/admin/analytics"), listRequest]);
     renderMetrics(overview, analytics);
     renderAnalytics(analytics);
     if (state.view === "users") state.users = list;
+    else if (state.view === "operations") { state.tasks = list.items || []; state.taskTotal = list.total || 0; renderPagination(); }
     else state.jobs = list;
     renderTable();
   } catch (error) {
@@ -120,6 +132,21 @@ async function load() {
   } finally {
     $("refreshButton").disabled = false;
   }
+}
+
+function renderPagination() {
+  const visible = state.view === "operations";
+  $("pagination").hidden = !visible;
+  if (!visible) return;
+  const start = state.taskTotal ? state.taskOffset + 1 : 0;
+  const end = Math.min(state.taskOffset + state.taskLimit, state.taskTotal);
+  $("pageInfo").textContent = `第 ${start}-${end} 条，共 ${state.taskTotal} 条`;
+  $("prevPage").disabled = state.taskOffset === 0;
+  $("nextPage").disabled = state.taskOffset + state.taskLimit >= state.taskTotal;
+}
+
+function toUtcIso(value) {
+  return value ? new Date(value).toISOString() : "";
 }
 
 async function loadConfigStatus() {
@@ -200,15 +227,25 @@ document.addEventListener("DOMContentLoaded", () => {
   $("loginForm").addEventListener("submit", login);
   $("logoutButton").addEventListener("click", async () => { try { await request("/api/admin/logout", { method: "POST" }); } finally { showLogin(); } });
   $("refreshButton").addEventListener("click", load);
-  $("searchButton").addEventListener("click", load);
   $("closeDrawer").addEventListener("click", () => { $("drawer").hidden = true; });
   $("closeModal").addEventListener("click", () => { $("modal").hidden = true; });
   $("creditForm").addEventListener("submit", adjustCredit);
   document.querySelectorAll(".tab").forEach((button) => button.addEventListener("click", () => {
     state.view = button.dataset.view;
+    state.taskOffset = 0;
+    $("taskTypeSelect").hidden = state.view !== "operations";
+    $("statusSelect").hidden = state.view === "users";
+    $("createdAfter").hidden = state.view !== "operations";
+    $("createdBefore").hidden = state.view !== "operations";
+    $("failureInput").hidden = state.view !== "operations";
+    $("pagination").hidden = state.view !== "operations";
+    $("searchInput").placeholder = state.view === "operations" ? "搜索任务 ID / 用户 / 文件名" : "搜索用户 ID / openid";
     document.querySelectorAll(".tab").forEach((item) => item.classList.toggle("active", item === button));
     load();
   }));
+  $("searchButton").addEventListener("click", () => { state.taskOffset = 0; load(); });
+  $("prevPage").addEventListener("click", () => { state.taskOffset = Math.max(0, state.taskOffset - state.taskLimit); load(); });
+  $("nextPage").addEventListener("click", () => { state.taskOffset += state.taskLimit; load(); });
   document.addEventListener("click", async (event) => {
     const user = event.target.closest("[data-user]");
     if (user) await openUser(user.dataset.user);
@@ -228,6 +265,28 @@ document.addEventListener("DOMContentLoaded", () => {
       toast("已退款");
       await load();
     }
+    const task = event.target.closest("[data-task-type]");
+    if (task) await openTask(task.dataset.taskType, task.dataset.taskId);
   });
   if (state.token) showApp();
 });
+
+async function openTask(taskType, taskId) {
+  try {
+    const data = await request(`/api/admin/operations/tasks/${taskType}/${taskId}`);
+    const task = data.task;
+    const actions = task.status === "processing" ? `<button class="action" data-task-close="${taskType}:${taskId}">关闭并退款</button>` : task.status !== "failed" ? `<button class="action" data-task-refund="${taskType}:${taskId}">退款</button>` : "";
+    $("drawerTitle").textContent = `${task.label} #${task.id}`;
+    $("drawerBody").innerHTML = `<div class="detail-card"><div class="detail-row"><span>用户</span><strong>${escapeHtml(data.user.openid || data.user.id)}</strong></div><div class="detail-row"><span>状态</span>${statusTag(task.status)}</div><div class="detail-row"><span>文件</span><strong>${escapeHtml(task.filename || "-")}</strong></div><div class="detail-row"><span>来源</span><strong>${escapeHtml(task.source_url || task.source_platform || task.source_type || "-")}</strong></div><div class="detail-row"><span>创建时间</span><strong>${formatDate(task.created_at)}</strong></div><div class="detail-row"><span>更新时间</span><strong>${formatDate(task.updated_at)}</strong></div></div><div class="drawer-actions">${actions}</div><div class="detail-card"><p class="kicker">错误信息</p><pre class="json-preview">${escapeHtml(task.error_message || "无")}</pre></div><div class="detail-card"><p class="kicker">结果摘要</p><pre class="json-preview">${escapeHtml(JSON.stringify(task.result || {}, null, 2))}</pre></div><div class="detail-card"><p class="kicker">算力流水</p>${data.ledger.map((item) => `<div class="detail-row"><span>${escapeHtml(item.reason)}</span><strong>${item.amount > 0 ? "+" : ""}${item.amount}</strong></div>`).join("") || '<div class="empty-state">暂无流水</div>'}</div><div class="detail-card"><p class="kicker">管理员审计</p>${data.audits.map((item) => `<div class="detail-row"><span>${escapeHtml(item.action)} · ${escapeHtml(item.admin_username)}</span><strong>${formatDate(item.created_at)}</strong></div>`).join("") || '<div class="empty-state">暂无操作</div>'}</div>`;
+    $("drawer").hidden = false;
+    $("drawerBody").querySelectorAll("[data-task-refund],[data-task-close]").forEach((button) => button.addEventListener("click", async () => {
+      const [type, id] = (button.dataset.taskRefund || button.dataset.taskClose).split(":");
+      const reason = window.prompt(button.dataset.taskClose ? "请输入关闭原因" : "请输入退款原因", button.dataset.taskClose ? "任务超时" : "运营补偿");
+      if (!reason) return;
+      await request(`/api/admin/operations/tasks/${type}/${id}/${button.dataset.taskClose ? "close" : "refund"}`, { method: "POST", body: JSON.stringify({ reason }) });
+      toast("操作已完成");
+      await openTask(type, id);
+      await load();
+    }));
+  } catch (error) { toast(error.message); }
+}

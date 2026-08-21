@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import secrets
 from collections import Counter
@@ -12,7 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
-from app.commercial import AD_DAILY_LIMIT, IMAGE_CREDIT_COST, VIDEO_CREDIT_COST, connect, hash_token, change_credits, utc_now
+from app.commercial import AD_DAILY_LIMIT, IMAGE_CREDIT_COST, VIDEO_CREDIT_COST, change_credits, connect, hash_token, utc_now
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD_HASH = os.getenv("ADMIN_PASSWORD_HASH", "").strip()
@@ -35,6 +36,10 @@ class CreditAdjustment(BaseModel):
     reason: str = Field(min_length=2, max_length=120)
 
 
+class TaskOperation(BaseModel):
+    reason: str = Field(min_length=2, max_length=200)
+
+
 def verify_password(password: str, encoded: str) -> bool:
     try:
         algorithm, iterations, salt, digest = encoded.split("$", 3)
@@ -53,7 +58,7 @@ def admin_user(x_admin_token: str | None = Header(default=None)) -> dict[str, st
         row = db.execute("SELECT * FROM admin_sessions WHERE token_hash=? AND expires_at>?", (hash_token(x_admin_token), utc_now().isoformat())).fetchone()
     if not row:
         raise HTTPException(status_code=401, detail="管理员登录已过期")
-    return {"role": "admin"}
+    return {"role": "admin", "username": ADMIN_USERNAME}
 
 
 def row_dict(row: Any) -> dict[str, Any]:
@@ -87,15 +92,72 @@ def classify_failure(message: str | None) -> str:
 
 TASKS_CTE = """
     WITH tasks AS (
-        SELECT id,user_id,mode AS task_type,status,cost,created_at,updated_at,error_message FROM jobs
+        SELECT id,user_id,mode AS task_type,status,cost,filename,source_type,source_url,source_platform,
+            analysis_task AS task_detail,result_json,error_message,created_at,updated_at FROM jobs
         UNION ALL
         SELECT id,user_id,'depth' AS task_type,
             CASE WHEN status='completed' THEN 'succeeded' WHEN status='failed' THEN 'failed' ELSE 'processing' END,
-            cost,created_at,updated_at,error_message FROM depth_jobs
+            cost,filename,source_type,NULL AS source_url,NULL AS source_platform,preset AS task_detail,
+            result_json,error_message,created_at,updated_at FROM depth_jobs
         UNION ALL
-        SELECT id,user_id,'optimization' AS task_type,status,cost,created_at,updated_at,error_message FROM prompt_optimizations
+        SELECT o.id,o.user_id,'optimization' AS task_type,o.status,o.cost,
+            COALESCE(j.filename,'提示词优化') AS filename,'analysis' AS source_type,NULL AS source_url,
+            o.platform AS source_platform,o.strategy AS task_detail,o.result_json,o.error_message,o.created_at,o.updated_at
+            FROM prompt_optimizations o LEFT JOIN jobs j ON j.id=o.job_id
+        UNION ALL
+        SELECT id,user_id,'diagnostic' AS task_type,
+            CASE WHEN status='succeeded' THEN 'succeeded' WHEN status='failed' THEN 'failed' ELSE 'processing' END,
+            cost,COALESCE(original_filename,'视频复刻诊断') AS filename,'upload' AS source_type,NULL AS source_url,
+            NULL AS source_platform,generated_filename AS task_detail,result_json,error_message,created_at,updated_at
+            FROM replication_diagnostics
     )
 """
+
+TASK_TYPE_LABELS = {
+    "image": "图片反推", "video": "视频反推", "depth": "深度转换",
+    "optimization": "提示词优化", "diagnostic": "视频复刻诊断",
+}
+
+TASK_TABLES = {
+    "image": ("jobs", "job", "status", "failed"),
+    "video": ("jobs", "job", "status", "failed"),
+    "depth": ("depth_jobs", "depth_job", "status", "failed"),
+    "optimization": ("prompt_optimizations", "prompt_optimization", "status", "failed"),
+    "diagnostic": ("replication_diagnostics", "replication_diagnostic", "status", "failed"),
+}
+
+
+def normalized_task_status(task_type: str, status: str) -> str:
+    if task_type == "depth":
+        return "succeeded" if status == "completed" else "failed" if status == "failed" else "processing"
+    if task_type == "diagnostic":
+        return "succeeded" if status == "succeeded" else "failed" if status == "failed" else "processing"
+    return status
+
+
+def sanitize_result(value: Any) -> Any:
+    blocked = {"api_key", "apikey", "authorization", "token", "secret", "password", "path"}
+    if isinstance(value, dict):
+        return {key: sanitize_result(item) for key, item in value.items() if key.lower() not in blocked}
+    if isinstance(value, list):
+        return [sanitize_result(item) for item in value]
+    return value
+
+
+def task_result_preview(raw: str | None) -> Any:
+    if not raw:
+        return None
+    try:
+        return sanitize_result(json.loads(raw))
+    except (TypeError, ValueError):
+        return raw[:4000]
+
+
+def write_audit_log(db: Any, admin: dict[str, str], action: str, target_type: str, target_id: int, user_id: int, reason: str, metadata: dict[str, Any] | None = None) -> None:
+    db.execute(
+        "INSERT INTO admin_audit_logs(admin_username,action,target_type,target_id,user_id,reason,metadata_json,created_at) VALUES(?,?,?,?,?,?,?,?)",
+        (admin["username"], action, target_type, str(target_id), user_id, reason, json.dumps(metadata or {}, ensure_ascii=False), utc_now().isoformat()),
+    )
 
 
 @admin_router.post("/login")
@@ -235,7 +297,7 @@ async def analytics(_: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
 
     summary = row_dict(today_summary)
     summary["success_rate"] = round(summary["succeeded"] * 100 / summary["total"], 1) if summary["total"] else 0
-    type_labels = {"image": "图片反推", "video": "视频反推", "depth": "深度转换", "optimization": "提示词优化"}
+    type_labels = {"image": "图片反推", "video": "视频反推", "depth": "深度转换", "optimization": "提示词优化", "diagnostic": "视频复刻诊断"}
     type_metrics = []
     for row in task_types:
         item = row_dict(row)
@@ -376,7 +438,7 @@ async def jobs(status: str = "", limit: int = 100, _: dict[str, str] = Depends(a
 
 
 @admin_router.post("/jobs/{job_id}/refund")
-async def refund_job(job_id: int, _: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
+async def refund_job(job_id: int, admin: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
     with connect() as db:
         db.execute("BEGIN IMMEDIATE")
         job = db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -384,7 +446,133 @@ async def refund_job(job_id: int, _: dict[str, str] = Depends(admin_user)) -> di
             raise HTTPException(status_code=404, detail="任务不存在")
         if job["status"] == "processing":
             raise HTTPException(status_code=409, detail="任务仍在处理中，请稍后再退款")
-        balance = change_credits(db, job["user_id"], job["cost"], "admin_refund", "job", str(job_id), f"admin:refund:{job_id}")
+        existing = db.execute("SELECT balance_after FROM credit_ledger WHERE reference_type='job' AND reference_id=? AND amount>0", (str(job_id),)).fetchone()
+        if existing:
+            return {"job_id": job_id, "credits": existing["balance_after"], "idempotent": True}
+        balance = change_credits(db, job["user_id"], job["cost"], "admin_refund:旧任务入口", "job", str(job_id), f"admin:refund:job:{job_id}")
         db.execute("UPDATE jobs SET status='failed',error_message='管理员手动退款',updated_at=? WHERE id=?", (utc_now().isoformat(), job_id))
+        write_audit_log(db, admin, "refund", "job", job_id, job["user_id"], "旧任务入口退款", {"cost": job["cost"]})
         db.commit()
-    return {"job_id": job_id, "credits": balance}
+    return {"job_id": job_id, "credits": balance, "idempotent": False}
+
+
+@admin_router.get("/operations/tasks")
+async def operation_tasks(
+    task_type: str = "", status: str = "", query: str = "",
+    created_after: str = "", created_before: str = "", failure: str = "",
+    limit: int = 50, offset: int = 0, _: dict[str, str] = Depends(admin_user),
+) -> dict[str, Any]:
+    allowed_types = set(TASK_TYPE_LABELS)
+    if task_type and task_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="不支持的任务类型")
+    normalized_statuses = {"processing", "succeeded", "failed"}
+    if status and status not in normalized_statuses:
+        raise HTTPException(status_code=400, detail="不支持的任务状态")
+    limit = max(1, min(limit, 200))
+    offset = max(0, min(offset, 100000))
+    clauses: list[str] = []
+    params: list[Any] = []
+    if task_type:
+        clauses.append("task_type=?")
+        params.append(task_type)
+    if status:
+        clauses.append("status=?")
+        params.append(status)
+    if query.strip():
+        pattern = f"%{query.strip()}%"
+        clauses.append("(CAST(id AS TEXT) LIKE ? OR CAST(user_id AS TEXT) LIKE ? OR filename LIKE ? OR COALESCE(error_message,'') LIKE ? OR user_id IN (SELECT id FROM users WHERE openid LIKE ?))")
+        params.extend([pattern, pattern, pattern, pattern, pattern])
+    if created_after:
+        clauses.append("created_at>=?")
+        params.append(created_after)
+    if created_before:
+        clauses.append("created_at<=?")
+        params.append(created_before)
+    if failure.strip():
+        clauses.append("COALESCE(error_message,'') LIKE ?")
+        params.append(f"%{failure.strip()}%")
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    with connect() as db:
+        total = db.execute(TASKS_CTE + f"SELECT COUNT(*) FROM tasks{where}", params).fetchone()[0]
+        rows = db.execute(
+            TASKS_CTE + f"SELECT id,user_id,task_type,status,cost,filename,source_type,source_url,source_platform,task_detail,error_message,created_at,updated_at,CASE WHEN status IN ('succeeded','failed') THEN ROUND((julianday(updated_at)-julianday(created_at))*86400) ELSE NULL END AS duration_seconds FROM tasks{where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            [*params, limit, offset],
+        ).fetchall()
+        user_ids = {row["user_id"] for row in rows}
+        users = {}
+        if user_ids:
+            marks = ",".join("?" for _ in user_ids)
+            users = {row["id"]: row["openid"] for row in db.execute(f"SELECT id,openid FROM users WHERE id IN ({marks})", tuple(user_ids)).fetchall()}
+    items = []
+    for row in rows:
+        item = row_dict(row)
+        item["label"] = TASK_TYPE_LABELS.get(item["task_type"], item["task_type"])
+        item["openid"] = users.get(item["user_id"], "未知用户")
+        item["error_message"] = (item["error_message"] or "")[:240]
+        items.append(item)
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+def load_task(db: Any, task_type: str, task_id: int) -> Any:
+    config = TASK_TABLES.get(task_type)
+    if not config:
+        raise HTTPException(status_code=400, detail="不支持的任务类型")
+    if task_type in {"image", "video"}:
+        row = db.execute("SELECT * FROM jobs WHERE id=? AND mode=?", (task_id, task_type)).fetchone()
+    else:
+        row = db.execute(f"SELECT * FROM {config[0]} WHERE id=?", (task_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return row
+
+
+@admin_router.get("/operations/tasks/{task_type}/{task_id}")
+async def operation_task_detail(task_type: str, task_id: int, _: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
+    with connect() as db:
+        row = load_task(db, task_type, task_id)
+        table, reference_type, _, _ = TASK_TABLES[task_type]
+        ledger = db.execute("SELECT id,amount,balance_after,reason,reference_type,reference_id,created_at FROM credit_ledger WHERE reference_type=? AND reference_id=? ORDER BY id DESC", (reference_type, str(task_id))).fetchall()
+        audits = db.execute("SELECT id,admin_username,action,reason,metadata_json,created_at FROM admin_audit_logs WHERE target_type=? AND target_id=? ORDER BY id DESC LIMIT 30", (reference_type, str(task_id))).fetchall()
+        user = db.execute("SELECT id,openid,credits,is_blocked FROM users WHERE id=?", (row["user_id"],)).fetchone()
+    payload = row_dict(row)
+    payload["task_type"] = task_type
+    payload["label"] = TASK_TYPE_LABELS[task_type]
+    payload["status"] = normalized_task_status(task_type, payload.get("status", ""))
+    payload["result"] = task_result_preview(payload.pop("result_json", None))
+    for key in ("original_path", "generated_path", "artifact_path", "frames_path", "manifest_path", "package_path"):
+        payload.pop(key, None)
+    return {"task": payload, "user": row_dict(user), "ledger": [row_dict(item) for item in ledger], "audits": [row_dict(item) for item in audits]}
+
+
+@admin_router.post("/operations/tasks/{task_type}/{task_id}/refund")
+async def operation_task_refund(task_type: str, task_id: int, body: TaskOperation, admin: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = load_task(db, task_type, task_id)
+        table, reference_type, status_column, failed_status = TASK_TABLES[task_type]
+        current_status = normalized_task_status(task_type, row[status_column])
+        if current_status == "processing":
+            raise HTTPException(status_code=409, detail="任务仍在处理中，不能退款")
+        existing = db.execute("SELECT balance_after FROM credit_ledger WHERE reference_type=? AND reference_id=? AND amount>0", (reference_type, str(task_id))).fetchone()
+        if existing:
+            return {"task_type": task_type, "task_id": task_id, "credits": existing["balance_after"], "idempotent": True}
+        balance = change_credits(db, row["user_id"], row["cost"], f"admin_refund:{body.reason}", reference_type, str(task_id), f"admin:refund:{reference_type}:{task_id}")
+        db.execute(f"UPDATE {table} SET {status_column}=?,error_message=?,updated_at=? WHERE id=?", (failed_status, f"管理员退款：{body.reason}", utc_now().isoformat(), task_id))
+        write_audit_log(db, admin, "refund", reference_type, task_id, row["user_id"], body.reason, {"cost": row["cost"]})
+        db.commit()
+    return {"task_type": task_type, "task_id": task_id, "credits": balance, "idempotent": False}
+
+
+@admin_router.post("/operations/tasks/{task_type}/{task_id}/close")
+async def operation_task_close(task_type: str, task_id: int, body: TaskOperation, admin: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = load_task(db, task_type, task_id)
+        table, reference_type, status_column, failed_status = TASK_TABLES[task_type]
+        if normalized_task_status(task_type, row[status_column]) != "processing":
+            raise HTTPException(status_code=409, detail="只有处理中的任务可以关闭")
+        db.execute(f"UPDATE {table} SET {status_column}=?,error_message=?,updated_at=? WHERE id=?", (failed_status, f"管理员关闭：{body.reason}", utc_now().isoformat(), task_id))
+        balance = change_credits(db, row["user_id"], row["cost"], f"admin_close_refund:{body.reason}", reference_type, str(task_id), f"admin:close_refund:{reference_type}:{task_id}")
+        write_audit_log(db, admin, "close", reference_type, task_id, row["user_id"], body.reason, {"refund": row["cost"]})
+        db.commit()
+    return {"task_type": task_type, "task_id": task_id, "credits": balance}
