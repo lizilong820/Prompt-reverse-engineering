@@ -290,3 +290,62 @@ async function openTask(taskType, taskId) {
     }));
   } catch (error) { toast(error.message); }
 }
+
+function riskTag(level) {
+  const labels = { normal: ["正常", "ok"], watch: ["关注", "warn"], high: ["高风险", "bad"], banned: ["已封禁", "bad"] };
+  const item = labels[level] || [level || "正常", "warn"];
+  return '<span class="status ' + item[1] + '">' + escapeHtml(item[0]) + "</span>";
+}
+
+function detailRows(items, makeLabel, makeValue) {
+  if (!items.length) return '<div class="empty-state">暂无记录</div>';
+  return items.slice(0, 20).map((item) => '<div class="detail-row"><span>' + escapeHtml(makeLabel(item)) + '</span><strong>' + makeValue(item) + "</strong></div>").join("");
+}
+
+async function openUser(id) {
+  const data = await request("/api/admin/users/" + id);
+  const user = data.user;
+  const taskCards = [
+    ["图片/视频反推", data.jobs, (item) => item.mode + " · " + item.filename],
+    ["深度转换", data.depth_jobs, (item) => item.preset + " · " + item.filename],
+    ["提示词优化", data.optimizations, (item) => item.strategy + " · " + item.platform],
+    ["视频复刻诊断", data.diagnostics, (item) => (item.original_filename || "-") + " / " + (item.generated_filename || "-")],
+  ].map((group) => '<div class="detail-card"><p class="kicker">' + group[0] + "</p>" + detailRows(group[1], group[2], (item) => statusTag(item.status === "completed" ? "succeeded" : item.status)) + "</div>").join("");
+  $("drawerTitle").textContent = "用户 #" + user.id;
+  $("drawerBody").innerHTML = '<div class="detail-card"><div class="detail-row"><span>OpenID</span><strong>' + escapeHtml(user.openid) + '</strong></div><div class="detail-row"><span>当前算力</span><strong>' + user.credits + '</strong></div><div class="detail-row"><span>风险等级</span>' + riskTag(user.risk_level) + '</div><div class="detail-row"><span>账号状态</span><strong>' + (user.is_blocked ? "已封禁" : "正常") + '</strong></div><div class="detail-row"><span>封禁原因</span><strong>' + escapeHtml(user.block_reason || "-") + '</strong></div><div class="detail-row"><span>运营备注</span><strong>' + escapeHtml(user.admin_note || "-") + '</strong></div><div class="detail-row"><span>注册时间</span><strong>' + formatDate(user.created_at) + '</strong></div></div><div class="drawer-actions"><button class="action" data-adjust="' + user.id + '">调整算力</button><button class="action" data-profile="' + user.id + '">编辑运营信息</button><button class="action" data-block="' + user.id + '" data-blocked="' + user.is_blocked + '">' + (user.is_blocked ? "解除封禁" : "封禁用户") + '</button></div><div class="detail-card"><p class="kicker">算力流水</p>' + detailRows(data.ledger, (item) => item.reason, (item) => (item.amount > 0 ? "+" : "") + item.amount + " · " + formatDate(item.created_at)) + '</div><div class="detail-card"><p class="kicker">激励广告</p>' + detailRows(data.ads, (item) => item.status, (item) => formatDate(item.claimed_at || item.created_at)) + '</div><div class="detail-card"><p class="kicker">创作项目</p>' + detailRows(data.projects, (item) => item.title, (item) => escapeHtml(item.recent_platform)) + '</div>' + taskCards + '<div class="detail-card"><p class="kicker">管理员审计</p>' + detailRows(data.audits, (item) => item.action + " · " + item.reason, (item) => formatDate(item.created_at)) + "</div>";
+  $("drawer").hidden = false;
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  document.addEventListener("click", async (event) => {
+    const profile = event.target.closest("[data-profile]");
+    const block = event.target.closest("[data-block]");
+    if (!profile && !block) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    try {
+      const userId = (profile || block).dataset.profile || block.dataset.block;
+      if (profile) {
+        const data = await request("/api/admin/users/" + userId);
+        const note = window.prompt("运营备注", data.user.admin_note || "");
+        if (note === null) return;
+        const riskLevel = window.prompt("风险等级：normal / watch / high", data.user.risk_level || "normal");
+        if (!["normal", "watch", "high"].includes(riskLevel)) return toast("风险等级不正确");
+        const reason = window.prompt("请输入修改原因", "运营标记更新");
+        if (!reason) return;
+        await request("/api/admin/users/" + userId + "/profile", { method: "PATCH", body: JSON.stringify({ admin_note: note, risk_level: riskLevel, reason }) });
+        toast("运营信息已保存");
+      } else {
+        const endpoint = block.dataset.blocked === "1" ? "unblock" : "block";
+        const reason = window.prompt(endpoint === "block" ? "请输入封禁原因" : "请输入解除封禁原因", endpoint === "block" ? "异常使用行为" : "人工复核通过");
+        if (!reason) return;
+        await request("/api/admin/users/" + userId + "/" + endpoint, { method: "POST", body: JSON.stringify({ reason }) });
+        toast("用户状态已更新");
+      }
+      await openUser(userId);
+      await load();
+    } catch (error) {
+      toast(error.message);
+    }
+  }, true);
+});

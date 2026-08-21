@@ -40,6 +40,16 @@ class TaskOperation(BaseModel):
     reason: str = Field(min_length=2, max_length=200)
 
 
+class UserProfileUpdate(BaseModel):
+    admin_note: str = Field(default="", max_length=2000)
+    risk_level: str = Field(default="normal", pattern="^(normal|watch|high|banned)$")
+    reason: str = Field(min_length=2, max_length=200)
+
+
+class UserStatusUpdate(BaseModel):
+    reason: str = Field(min_length=2, max_length=200)
+
+
 def verify_password(password: str, encoded: str) -> bool:
     try:
         algorithm, iterations, salt, digest = encoded.split("$", 3)
@@ -388,41 +398,80 @@ async def users(query: str = "", limit: int = 50, _: dict[str, str] = Depends(ad
     limit = max(1, min(limit, 100))
     pattern = "%" + query.strip() + "%"
     with connect() as db:
-        rows = db.execute("SELECT id,openid,unionid,credits,is_blocked,created_at,updated_at FROM users WHERE openid LIKE ? OR CAST(id AS TEXT) LIKE ? ORDER BY id DESC LIMIT ?", (pattern, pattern, limit)).fetchall()
+        rows = db.execute("SELECT id,openid,unionid,credits,is_blocked,admin_note,risk_level,block_reason,blocked_at,blocked_by,created_at,updated_at FROM users WHERE openid LIKE ? OR CAST(id AS TEXT) LIKE ? ORDER BY id DESC LIMIT ?", (pattern, pattern, limit)).fetchall()
     return [row_dict(row) for row in rows]
 
 
 @admin_router.get("/users/{user_id}")
 async def user_detail(user_id: int, _: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
     with connect() as db:
-        user = db.execute("SELECT id,openid,unionid,credits,is_blocked,created_at,updated_at FROM users WHERE id=?", (user_id,)).fetchone()
+        user = db.execute("SELECT id,openid,unionid,credits,is_blocked,admin_note,risk_level,block_reason,blocked_at,blocked_by,created_at,updated_at FROM users WHERE id=?", (user_id,)).fetchone()
         if not user:
             raise HTTPException(status_code=404, detail="用户不存在")
         ledger = db.execute("SELECT id,amount,balance_after,reason,reference_type,reference_id,created_at FROM credit_ledger WHERE user_id=? ORDER BY id DESC LIMIT 50", (user_id,)).fetchall()
         jobs = db.execute("SELECT id,mode,filename,cost,status,error_message,created_at,updated_at FROM jobs WHERE user_id=? ORDER BY id DESC LIMIT 50", (user_id,)).fetchall()
-    return {"user": row_dict(user), "ledger": [row_dict(row) for row in ledger], "jobs": [row_dict(row) for row in jobs]}
+        depth = db.execute("SELECT id,preset,filename,cost,status,error_message,created_at,updated_at FROM depth_jobs WHERE user_id=? ORDER BY id DESC LIMIT 50", (user_id,)).fetchall()
+        optimizations = db.execute("SELECT id,job_id,strategy,platform,cost,status,error_message,created_at,updated_at FROM prompt_optimizations WHERE user_id=? ORDER BY id DESC LIMIT 50", (user_id,)).fetchall()
+        diagnostics = db.execute("SELECT id,original_filename,generated_filename,cost,status,error_message,created_at,updated_at FROM replication_diagnostics WHERE user_id=? ORDER BY id DESC LIMIT 50", (user_id,)).fetchall()
+        ads = db.execute("SELECT id,status,expires_at,claimed_at,created_at FROM reward_claims WHERE user_id=? ORDER BY id DESC LIMIT 50", (user_id,)).fetchall()
+        projects = db.execute("SELECT id,title,note,is_favorite,recent_platform,created_at,updated_at FROM creative_projects WHERE user_id=? ORDER BY updated_at DESC LIMIT 50", (user_id,)).fetchall()
+        audits = db.execute("SELECT id,admin_username,action,target_type,target_id,reason,metadata_json,created_at FROM admin_audit_logs WHERE user_id=? ORDER BY id DESC LIMIT 100", (user_id,)).fetchall()
+    return {"user": row_dict(user), "ledger": [row_dict(row) for row in ledger], "jobs": [row_dict(row) for row in jobs], "depth_jobs": [row_dict(row) for row in depth], "optimizations": [row_dict(row) for row in optimizations], "diagnostics": [row_dict(row) for row in diagnostics], "ads": [row_dict(row) for row in ads], "projects": [row_dict(row) for row in projects], "audits": [row_dict(row) for row in audits]}
+
+
+@admin_router.patch("/users/{user_id}/profile")
+async def update_user_profile(user_id: int, body: UserProfileUpdate, admin: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        user = db.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        note = body.admin_note.strip()
+        db.execute("UPDATE users SET admin_note=?,risk_level=?,updated_at=? WHERE id=?", (note, body.risk_level, utc_now().isoformat(), user_id))
+        write_audit_log(db, admin, "profile_update", "user", user_id, user_id, body.reason, {"risk_level": body.risk_level, "note_length": len(note)})
+        db.commit()
+        row = db.execute("SELECT id,openid,unionid,credits,is_blocked,admin_note,risk_level,block_reason,blocked_at,blocked_by,created_at,updated_at FROM users WHERE id=?", (user_id,)).fetchone()
+    return row_dict(row)
 
 
 @admin_router.post("/users/{user_id}/credits")
-async def adjust_credits(user_id: int, body: CreditAdjustment, _: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
+async def adjust_credits(user_id: int, body: CreditAdjustment, admin: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
     with connect() as db:
         db.execute("BEGIN IMMEDIATE")
+        user = db.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在")
         balance = change_credits(db, user_id, body.amount, "admin_adjustment:" + body.reason, "admin", str(user_id), "admin:" + secrets.token_hex(16))
+        write_audit_log(db, admin, "credit_adjustment", "user", user_id, user_id, body.reason, {"amount": body.amount, "balance_after": balance})
         db.commit()
     return {"user_id": user_id, "credits": balance}
 
 
 @admin_router.post("/users/{user_id}/block")
-async def block_user(user_id: int, _: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
+async def block_user(user_id: int, body: UserStatusUpdate | None = None, admin: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
     with connect() as db:
-        db.execute("UPDATE users SET is_blocked=1,updated_at=? WHERE id=?", (utc_now().isoformat(), user_id))
+        db.execute("BEGIN IMMEDIATE")
+        user = db.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        now = utc_now().isoformat()
+        reason = body.reason if body else "后台封禁（未填写原因）"
+        db.execute("UPDATE users SET is_blocked=1,risk_level='banned',block_reason=?,blocked_at=?,blocked_by=?,updated_at=? WHERE id=?", (reason, now, admin["username"], now, user_id))
+        write_audit_log(db, admin, "block", "user", user_id, user_id, reason)
+        db.commit()
     return {"user_id": user_id, "is_blocked": True}
 
 
 @admin_router.post("/users/{user_id}/unblock")
-async def unblock_user(user_id: int, _: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
+async def unblock_user(user_id: int, body: UserStatusUpdate | None = None, admin: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
     with connect() as db:
-        db.execute("UPDATE users SET is_blocked=0,updated_at=? WHERE id=?", (utc_now().isoformat(), user_id))
+        db.execute("BEGIN IMMEDIATE")
+        user = db.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        db.execute("UPDATE users SET is_blocked=0,risk_level='normal',block_reason='',blocked_at=NULL,blocked_by=NULL,updated_at=? WHERE id=?", (utc_now().isoformat(), user_id))
+        write_audit_log(db, admin, "unblock", "user", user_id, user_id, body.reason if body else "后台解除封禁（未填写原因）")
+        db.commit()
     return {"user_id": user_id, "is_blocked": False}
 
 

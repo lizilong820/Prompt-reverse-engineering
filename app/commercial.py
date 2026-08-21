@@ -314,6 +314,17 @@ def connect() -> sqlite3.Connection:
     except sqlite3.OperationalError:
         pass
     for statement in (
+        "ALTER TABLE users ADD COLUMN admin_note TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE users ADD COLUMN risk_level TEXT NOT NULL DEFAULT 'normal'",
+        "ALTER TABLE users ADD COLUMN block_reason TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE users ADD COLUMN blocked_at TEXT",
+        "ALTER TABLE users ADD COLUMN blocked_by TEXT",
+    ):
+        try:
+            db.execute(statement)
+        except sqlite3.OperationalError:
+            pass
+    for statement in (
         "ALTER TABLE jobs ADD COLUMN analysis_depth TEXT NOT NULL DEFAULT 'detailed'",
         "ALTER TABLE jobs ADD COLUMN source_type TEXT NOT NULL DEFAULT 'upload'",
         "ALTER TABLE jobs ADD COLUMN source_url TEXT",
