@@ -7,6 +7,8 @@ const reasonLabels = {
   job_refund: "反推失败返还",
   tool_refund: "工具失败返还",
   depth_job: "深度转换",
+  prompt_optimization: "提示词优化",
+  optimization_refund: "优化失败返还",
   admin_refund: "管理员返还"
 };
 

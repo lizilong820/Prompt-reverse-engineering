@@ -43,6 +43,7 @@ AD_REWARD_CREDITS = int(os.getenv("AD_REWARD_CREDITS", "1"))
 AD_DAILY_LIMIT = int(os.getenv("AD_DAILY_LIMIT", "20"))
 AD_COOLDOWN_SECONDS = int(os.getenv("AD_COOLDOWN_SECONDS", "3"))
 DEPTH_COMPUTE_COST = int(os.getenv("DEPTH_COMPUTE_COST", "1"))
+PROMPT_OPTIMIZATION_COST = int(os.getenv("PROMPT_OPTIMIZATION_COST", "1"))
 DEPTH_SERVICE_BASE_URL = os.getenv("DEPTH_SERVICE_BASE_URL", "https://depth.whaios.com").rstrip("/")
 DEPTH_RESULT_RETENTION_HOURS = int(os.getenv("DEPTH_RESULT_RETENTION_HOURS", "24"))
 DEPTH_ARTIFACT_SECRET = os.getenv("DEPTH_ARTIFACT_SECRET", "").strip() or WX_APP_SECRET
@@ -58,6 +59,7 @@ DEPTH_PRESET_OPTIONS: dict[str, dict[str, int | float]] = {
 }
 DEPTH_WAIT_TIMEOUT_SECONDS = int(os.getenv("DEPTH_WAIT_TIMEOUT_SECONDS", "1800"))
 DEPTH_WAIT_INTERVAL_SECONDS = int(os.getenv("DEPTH_WAIT_INTERVAL_SECONDS", "8"))
+PROMPT_OPTIMIZATION_STRATEGIES = {"action", "camera", "identity", "style", "concise", "professional"}
 
 commercial_router = APIRouter(prefix="/api/v1", tags=["mini-program"])
 
@@ -79,6 +81,12 @@ class RemoteAnalysisRequest(BaseModel):
 class DepthRemoteRequest(BaseModel):
     url: str = Field(min_length=8, max_length=4096)
     preset: str = "standard_depth"
+    idempotency_key: str = Field(min_length=12, max_length=128)
+
+
+class PromptOptimizationRequest(BaseModel):
+    strategy: str
+    platform: str = "universal"
     idempotency_key: str = Field(min_length=12, max_length=128)
 
 
@@ -167,9 +175,25 @@ def connect() -> sqlite3.Connection:
             updated_at TEXT NOT NULL,
             UNIQUE(user_id, idempotency_key)
         );
+        CREATE TABLE IF NOT EXISTS prompt_optimizations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            job_id INTEGER NOT NULL REFERENCES jobs(id),
+            strategy TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            cost INTEGER NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('processing','succeeded','failed')),
+            idempotency_key TEXT NOT NULL,
+            result_json TEXT,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(user_id, idempotency_key)
+        );
         CREATE INDEX IF NOT EXISTS idx_jobs_user_created ON jobs(user_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_ledger_user_created ON credit_ledger(user_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_depth_jobs_user_created ON depth_jobs(user_id, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_prompt_optimizations_job_created ON prompt_optimizations(job_id, id DESC);
     """)
     try:
         db.execute("ALTER TABLE users ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0")
@@ -197,7 +221,8 @@ def recover_interrupted_jobs() -> None:
     with connect() as db:
         rows = db.execute("SELECT id,user_id,cost FROM jobs WHERE status='processing'").fetchall()
         depth_rows = db.execute("SELECT id,user_id,cost FROM depth_jobs WHERE external_id IS NULL AND status IN ('submitting','waiting_service')").fetchall()
-        if not rows and not depth_rows:
+        optimization_rows = db.execute("SELECT id,user_id,cost FROM prompt_optimizations WHERE status='processing'").fetchall()
+        if not rows and not depth_rows and not optimization_rows:
             return
         db.execute("BEGIN IMMEDIATE")
         for row in rows:
@@ -206,6 +231,9 @@ def recover_interrupted_jobs() -> None:
         for row in depth_rows:
             change_credits(db, row["user_id"], row["cost"], "tool_refund", "depth_job", str(row["id"]), f"depth:refund:{row['id']}")
             db.execute("UPDATE depth_jobs SET status='failed',error_message='服务重启导致任务中断，算力次数已退回',updated_at=? WHERE id=?", (utc_now().isoformat(), row["id"]))
+        for row in optimization_rows:
+            change_credits(db, row["user_id"], row["cost"], "optimization_refund", "prompt_optimization", str(row["id"]), f"optimization:refund:{row['id']}")
+            db.execute("UPDATE prompt_optimizations SET status='failed',error_message='服务重启导致优化中断，算力次数已退回',updated_at=? WHERE id=?", (utc_now().isoformat(), row["id"]))
         db.commit()
     for directory_name in ("job-media", "depth-media"):
         media_dir = Path(DATA_DIR) / directory_name
@@ -280,7 +308,7 @@ async def wechat_login(body: LoginRequest) -> dict[str, Any]:
         db.execute("INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)", (hash_token(token), user_id, (now + timedelta(days=SESSION_DAYS)).isoformat(), now.isoformat()))
         credits = db.execute("SELECT credits FROM users WHERE id=?", (user_id,)).fetchone()["credits"]
         db.commit()
-    return {"token": token, "expires_in": SESSION_DAYS * 86400, "user": {"id": user_id, "credits": credits, "compute_count": credits}, "pricing": {"image": IMAGE_CREDIT_COST, "video": VIDEO_CREDIT_COST, "depth": DEPTH_COMPUTE_COST}, "ad": {"reward": AD_REWARD_CREDITS, "daily_limit": AD_DAILY_LIMIT}}
+    return {"token": token, "expires_in": SESSION_DAYS * 86400, "user": {"id": user_id, "credits": credits, "compute_count": credits}, "pricing": {"image": IMAGE_CREDIT_COST, "video": VIDEO_CREDIT_COST, "depth": DEPTH_COMPUTE_COST, "optimization": PROMPT_OPTIMIZATION_COST}, "ad": {"reward": AD_REWARD_CREDITS, "daily_limit": AD_DAILY_LIMIT}}
 
 
 @commercial_router.get("/me")
@@ -288,7 +316,7 @@ async def me(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     today = utc_now().date().isoformat()
     with connect() as db:
         used = db.execute("SELECT COUNT(*) FROM reward_claims WHERE user_id=? AND status='claimed' AND substr(claimed_at,1,10)=?", (user["id"], today)).fetchone()[0]
-    return {"id": user["id"], "credits": user["credits"], "compute_count": user["credits"], "pricing": {"image": IMAGE_CREDIT_COST, "video": VIDEO_CREDIT_COST, "depth": DEPTH_COMPUTE_COST}, "ad": {"reward": AD_REWARD_CREDITS, "daily_limit": AD_DAILY_LIMIT, "remaining_today": max(0, AD_DAILY_LIMIT - used)}}
+    return {"id": user["id"], "credits": user["credits"], "compute_count": user["credits"], "pricing": {"image": IMAGE_CREDIT_COST, "video": VIDEO_CREDIT_COST, "depth": DEPTH_COMPUTE_COST, "optimization": PROMPT_OPTIMIZATION_COST}, "ad": {"reward": AD_REWARD_CREDITS, "daily_limit": AD_DAILY_LIMIT, "remaining_today": max(0, AD_DAILY_LIMIT - used)}}
 
 
 @commercial_router.post("/rewards/ad/prepare")
@@ -383,6 +411,68 @@ async def process_remote_analysis_job(job_id: int, user_id: int, raw_url: str, c
         fail_analysis_job(job_id, user_id, cost, str(getattr(exc, "detail", "视频链接解析失败，算力次数已退回")))
     finally:
         shutil.rmtree(directory, ignore_errors=True)
+
+
+def optimization_payload(row: sqlite3.Row) -> dict[str, Any]:
+    result = json.loads(row["result_json"]) if row["result_json"] else None
+    return {
+        "id": row["id"],
+        "job_id": row["job_id"],
+        "strategy": row["strategy"],
+        "platform": row["platform"],
+        "cost": row["cost"],
+        "status": row["status"],
+        "result": result,
+        "error_message": row["error_message"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def fail_prompt_optimization(optimization_id: int, user_id: int, cost: int, message: str) -> None:
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute("SELECT status FROM prompt_optimizations WHERE id=? AND user_id=?", (optimization_id, user_id)).fetchone()
+        if not row or row["status"] != "processing":
+            db.rollback()
+            return
+        change_credits(db, user_id, cost, "optimization_refund", "prompt_optimization", str(optimization_id), f"optimization:refund:{optimization_id}")
+        db.execute(
+            "UPDATE prompt_optimizations SET status='failed',error_message=?,updated_at=? WHERE id=?",
+            (message[:500], utc_now().isoformat(), optimization_id),
+        )
+        db.commit()
+
+
+async def process_prompt_optimization(optimization_id: int, user_id: int, job_id: int, strategy: str, platform: str, cost: int) -> None:
+    try:
+        from app.main import optimize_existing_prompt
+
+        with connect() as db:
+            job = db.execute("SELECT * FROM jobs WHERE id=? AND user_id=?", (job_id, user_id)).fetchone()
+        if not job or job["status"] != "succeeded" or not job["result_json"]:
+            raise RuntimeError("原分析结果不存在或尚未完成")
+        result = job_payload(job)["result"]
+        platforms = result.get("prompts", {}).get("platforms", {})
+        selected = platforms.get(platform)
+        if not selected:
+            raise RuntimeError("目标模型不支持当前素材类型")
+        optimized = await optimize_existing_prompt(
+            result.get("analysis") or {},
+            {"zh": selected.get("zh", ""), "en": selected.get("en", "")},
+            strategy,
+            selected.get("label") or platform,
+            job["mode"] == "video" or job["analysis_task"] == "image_expand_video",
+        )
+        payload = {**optimized, "label": selected.get("label") or platform}
+        with connect() as db:
+            db.execute(
+                "UPDATE prompt_optimizations SET status='succeeded',result_json=?,error_message=NULL,updated_at=? WHERE id=?",
+                (json.dumps(payload, ensure_ascii=False), utc_now().isoformat(), optimization_id),
+            )
+    except Exception as exc:
+        logger.exception("Prompt optimization failed: optimization_id=%s job_id=%s", optimization_id, job_id)
+        fail_prompt_optimization(optimization_id, user_id, cost, str(getattr(exc, "detail", "提示词优化失败，算力次数已退回")))
 
 
 async def persist_job_media(file: UploadFile, mode: str, idempotency_key: str, directory_name: str = "job-media") -> tuple[Path, str]:
@@ -954,6 +1044,57 @@ async def get_job(job_id: int, user: dict[str, Any] = Depends(current_user)) -> 
     if not row:
         raise HTTPException(status_code=404, detail="任务不存在")
     return job_payload(row)
+
+
+@commercial_router.post("/jobs/{job_id}/optimizations", status_code=202)
+async def create_prompt_optimization(job_id: int, body: PromptOptimizationRequest, background_tasks: BackgroundTasks, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    if body.strategy not in PROMPT_OPTIMIZATION_STRATEGIES:
+        raise HTTPException(status_code=400, detail="不支持的提示词优化方式")
+    with connect() as db:
+        job = db.execute("SELECT * FROM jobs WHERE id=? AND user_id=?", (job_id, user["id"])).fetchone()
+    if not job:
+        raise HTTPException(status_code=404, detail="原分析任务不存在")
+    if job["status"] != "succeeded":
+        raise HTTPException(status_code=409, detail="原分析尚未完成，暂时不能优化")
+    result = job_payload(job)["result"] or {}
+    if body.platform not in result.get("prompts", {}).get("platforms", {}):
+        raise HTTPException(status_code=400, detail="目标模型不支持当前素材类型")
+    now = utc_now().isoformat()
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        existing = db.execute("SELECT * FROM prompt_optimizations WHERE user_id=? AND idempotency_key=?", (user["id"], body.idempotency_key)).fetchone()
+        if existing:
+            db.rollback()
+            return optimization_payload(existing)
+        cursor = db.execute(
+            "INSERT INTO prompt_optimizations(user_id,job_id,strategy,platform,cost,status,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?,'processing',?,?,?)",
+            (user["id"], job_id, body.strategy, body.platform, PROMPT_OPTIMIZATION_COST, body.idempotency_key, now, now),
+        )
+        optimization_id = int(cursor.lastrowid)
+        change_credits(db, user["id"], -PROMPT_OPTIMIZATION_COST, "prompt_optimization", "prompt_optimization", str(optimization_id), f"optimization:charge:{optimization_id}")
+        db.commit()
+    background_tasks.add_task(process_prompt_optimization, optimization_id, user["id"], job_id, body.strategy, body.platform, PROMPT_OPTIMIZATION_COST)
+    with connect() as db:
+        return optimization_payload(db.execute("SELECT * FROM prompt_optimizations WHERE id=?", (optimization_id,)).fetchone())
+
+
+@commercial_router.get("/jobs/{job_id}/optimizations")
+async def list_prompt_optimizations(job_id: int, user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+    with connect() as db:
+        job = db.execute("SELECT id FROM jobs WHERE id=? AND user_id=?", (job_id, user["id"])).fetchone()
+        if not job:
+            raise HTTPException(status_code=404, detail="原分析任务不存在")
+        rows = db.execute("SELECT * FROM prompt_optimizations WHERE job_id=? AND user_id=? ORDER BY id DESC LIMIT 30", (job_id, user["id"])).fetchall()
+    return [optimization_payload(row) for row in rows]
+
+
+@commercial_router.get("/jobs/{job_id}/optimizations/{optimization_id}")
+async def get_prompt_optimization(job_id: int, optimization_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    with connect() as db:
+        row = db.execute("SELECT * FROM prompt_optimizations WHERE id=? AND job_id=? AND user_id=?", (optimization_id, job_id, user["id"])).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="提示词优化任务不存在")
+    return optimization_payload(row)
 
 
 @commercial_router.get("/credits/ledger")

@@ -94,6 +94,26 @@ class HistoryItem(BaseModel):
     confidence: int
 
 
+PROMPT_OPTIMIZATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "zh": {"type": "string"},
+        "en": {"type": "string"},
+    },
+    "required": ["zh", "en"],
+}
+
+PROMPT_OPTIMIZATION_GUIDANCE = {
+    "action": "强化主体动作。补全动作顺序、幅度、方向、速度、重心、肢体协调、环境响应和结束状态；视频必须保留时间推进。",
+    "camera": "强化镜头语言。明确景别、机位、焦段感、推拉摇移跟拍、速度、路径、对焦和镜头结束位置。",
+    "identity": "强化人物一致性。明确人物数量、五官、发型、服装、体型、相对位置及跨帧稳定约束，避免身份漂移和肢体畸变。",
+    "style": "强化视觉风格。完善材质、布光、色彩管理、影调、镜头质感、后期效果和统一风格约束，不改变原始内容事实。",
+    "concise": "压缩为可直接使用的高密度短提示词。删除重复修饰，保留主体、场景、动作、镜头、光影、风格和关键负面约束。",
+    "professional": "扩展为专业制作提示词。系统整理主体、环境、构图、镜头、动作时间线、光影、材质、色彩、物理连续性和负面约束。",
+}
+
+
 ANALYSIS_SCHEMA: dict[str, Any] = {
     "type": "object", "additionalProperties": False,
     "properties": {
@@ -165,6 +185,59 @@ def make_prompts(analysis: VisualAnalysis, video_prompt: bool = False) -> Prompt
             "jimeng": {"label": "即梦", "zh": image_jimeng, "en": english},
         }
     return PromptBundle(universal=universal, midjourney=midjourney, flux=flux, video=video, chinese=universal, english=english, platforms=platforms)
+
+
+async def optimize_existing_prompt(analysis: dict[str, Any], source_prompt: dict[str, str], strategy: str, platform_label: str, is_video: bool) -> dict[str, str]:
+    if strategy not in PROMPT_OPTIMIZATION_GUIDANCE:
+        raise HTTPException(status_code=400, detail="不支持的提示词优化方式")
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=503, detail="提示词优化服务尚未配置")
+    media_guidance = "保留完整视频时间线、动作连续性和结尾状态。" if is_video else "保持单张画面的空间关系，不要虚构时间线。"
+    length_guidance = "中文不超过 260 字，英文不超过 150 个单词。" if strategy == "concise" else "内容完整但避免同义重复。"
+    instruction = (
+        "你是生成式视觉提示词编辑器。根据已经完成的结构化视觉分析和原提示词进行定向优化，不重新识别素材。"
+        "不得新增分析数据中不存在的人物、物体、品牌、地点、剧情或动作。输出必须适合指定生成平台。"
+        f"优化目标：{PROMPT_OPTIMIZATION_GUIDANCE[strategy]}{media_guidance}{length_guidance}"
+        "返回严格 JSON，仅包含 zh 和 en；两种语言语义一致，均为可直接复制使用的完整提示词。"
+    )
+    body_content = json.dumps({"platform": platform_label, "analysis": analysis, "source_prompt": source_prompt}, ensure_ascii=False)
+    formats = [
+        {"type": "json_schema", "json_schema": {"name": "optimized_prompt", "strict": True, "schema": PROMPT_OPTIMIZATION_SCHEMA}},
+        {"type": "json_object"},
+    ]
+    async with httpx.AsyncClient(timeout=httpx.Timeout(90.0, connect=15.0)) as client:
+        for attempt, response_format in enumerate(formats, start=1):
+            try:
+                response = await client.post(
+                    f"{OPENAI_BASE_URL}/chat/completions",
+                    headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+                    json={"model": OPENAI_MODEL, "temperature": 0.2, "response_format": response_format, "messages": [{"role": "system", "content": instruction}, {"role": "user", "content": body_content}]},
+                )
+            except httpx.HTTPError as exc:
+                raise HTTPException(status_code=502, detail="无法连接提示词优化服务") from exc
+            if response.is_error:
+                logger.error("Prompt optimization API %s: %s", response.status_code, response.text[:500])
+                if attempt == len(formats):
+                    raise HTTPException(status_code=502, detail="提示词优化请求失败")
+                continue
+            try:
+                content = response.json()["choices"][0]["message"]["content"]
+                if isinstance(content, list):
+                    content = "".join(part.get("text", "") for part in content)
+                content = content.strip()
+                if content.startswith("```json") and content.endswith("```"):
+                    content = content[7:-3].strip()
+                elif content.startswith("```") and content.endswith("```"):
+                    content = content[3:-3].strip()
+                result = json.loads(content)
+                zh, en = str(result.get("zh") or "").strip(), str(result.get("en") or "").strip()
+                if not zh or not en:
+                    raise ValueError("missing prompt language")
+                return {"zh": zh, "en": en}
+            except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError):
+                if attempt == len(formats):
+                    raise HTTPException(status_code=502, detail="提示词优化结果格式异常")
+    raise HTTPException(status_code=502, detail="提示词优化未返回有效结果")
 
 
 def as_data_url(content: bytes, content_type: str) -> str:
