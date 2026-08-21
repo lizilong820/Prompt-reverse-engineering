@@ -8,7 +8,8 @@
     "pages/ledger/ledger",
     "pages/diagnostic/diagnostic",
     "pages/diagnostic-result/diagnostic-result",
-    "pages/projects/projects"
+    "pages/projects/projects",
+    "pages/feedback/feedback"
   ],
   "window": {
     "navigationBarTitleText": "Prompt Lens",

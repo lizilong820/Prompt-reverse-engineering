@@ -122,6 +122,13 @@ class ProjectVersionRequest(BaseModel):
     source_id: int | None = None
 
 
+class FeedbackCreateRequest(BaseModel):
+    task_type: str = Field(pattern="^(job|depth_job|prompt_optimization|replication_diagnostic)$")
+    task_id: int = Field(gt=0)
+    category: str = Field(pattern="^(result|performance|billing|feature|other)$")
+    content: str = Field(min_length=5, max_length=2000)
+
+
 def depth_processing_options(preset: str, invert: bool, aspect_ratio: str, export_frames: bool) -> dict[str, int | float | bool | str]:
     if preset not in DEPTH_PRESETS:
         raise HTTPException(status_code=400, detail="不支持的深度转换模式")
@@ -299,6 +306,22 @@ def connect() -> sqlite3.Connection:
             source_id INTEGER,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS feedback_tickets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            task_type TEXT NOT NULL,
+            task_id INTEGER NOT NULL,
+            category TEXT NOT NULL,
+            content TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','in_progress','resolved','closed')),
+            admin_tags TEXT NOT NULL DEFAULT '',
+            admin_note TEXT NOT NULL DEFAULT '',
+            reply TEXT NOT NULL DEFAULT '',
+            replied_at TEXT,
+            replied_by TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
         CREATE INDEX IF NOT EXISTS idx_jobs_user_created ON jobs(user_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_ledger_user_created ON credit_ledger(user_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_depth_jobs_user_created ON depth_jobs(user_id, id DESC);
@@ -308,6 +331,8 @@ def connect() -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_admin_audit_user_created ON admin_audit_logs(user_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_creative_projects_user_updated ON creative_projects(user_id, is_favorite DESC, updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_project_versions_project_created ON project_versions(project_id, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_feedback_user_created ON feedback_tickets(user_id, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_feedback_status_created ON feedback_tickets(status, id DESC);
     """)
     try:
         db.execute("ALTER TABLE users ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0")
@@ -1466,6 +1491,50 @@ async def get_prompt_optimization(job_id: int, optimization_id: int, user: dict[
 async def credit_ledger(user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
     with connect() as db:
         rows = db.execute("SELECT id,amount,balance_after,reason,reference_type,reference_id,created_at FROM credit_ledger WHERE user_id=? ORDER BY id DESC LIMIT 100", (user["id"],)).fetchall()
+    return [dict(row) for row in rows]
+
+
+def feedback_task_exists(db: sqlite3.Connection, user_id: int, task_type: str, task_id: int) -> bool:
+    tables = {
+        "job": "jobs",
+        "depth_job": "depth_jobs",
+        "prompt_optimization": "prompt_optimizations",
+        "replication_diagnostic": "replication_diagnostics",
+    }
+    row = db.execute(f"SELECT id FROM {tables[task_type]} WHERE id=? AND user_id=?", (task_id, user_id)).fetchone()
+    return bool(row)
+
+
+@commercial_router.post("/feedback", status_code=201)
+async def create_feedback(body: FeedbackCreateRequest, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    now = utc_now().isoformat()
+    with connect() as db:
+        if not feedback_task_exists(db, user["id"], body.task_type, body.task_id):
+            raise HTTPException(status_code=404, detail="关联任务不存在")
+        db.execute("BEGIN IMMEDIATE")
+        existing = db.execute(
+            "SELECT * FROM feedback_tickets WHERE user_id=? AND task_type=? AND task_id=? AND status IN ('open','in_progress') ORDER BY id DESC LIMIT 1",
+            (user["id"], body.task_type, body.task_id),
+        ).fetchone()
+        if existing:
+            db.rollback()
+            return dict(existing)
+        ticket_id = db.execute(
+            "INSERT INTO feedback_tickets(user_id,task_type,task_id,category,content,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+            (user["id"], body.task_type, body.task_id, body.category, body.content.strip(), now, now),
+        ).lastrowid
+        db.commit()
+        row = db.execute("SELECT * FROM feedback_tickets WHERE id=?", (ticket_id,)).fetchone()
+    return dict(row)
+
+
+@commercial_router.get("/feedback")
+async def list_feedback(user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
+    with connect() as db:
+        rows = db.execute(
+            "SELECT id,task_type,task_id,category,content,status,admin_tags,reply,replied_at,created_at,updated_at FROM feedback_tickets WHERE user_id=? ORDER BY id DESC LIMIT 100",
+            (user["id"],),
+        ).fetchall()
     return [dict(row) for row in rows]
 
 

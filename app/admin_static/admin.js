@@ -4,6 +4,7 @@ const state = {
   users: [],
   jobs: [],
   tasks: [],
+  feedback: [],
   taskTotal: 0,
   taskOffset: 0,
   taskLimit: 50,
@@ -107,6 +108,11 @@ function renderTable() {
     $("tableBody").innerHTML = state.tasks.map((task) => `<tr><td>#${task.id}</td><td><strong>${escapeHtml(task.label)}</strong><small class="table-sub">${escapeHtml(task.task_detail || "")}</small></td><td><code>${escapeHtml(task.openid)}</code></td><td>${escapeHtml(task.source_platform || task.source_type || "-")}</td><td>${statusTag(task.status)}</td><td>${task.cost}</td><td>${formatDate(task.created_at)}<small class="table-sub">${task.duration_seconds == null ? "处理中" : formatDuration(task.duration_seconds)}</small></td><td><button class="action" data-task-type="${escapeHtml(task.task_type)}" data-task-id="${task.id}">详情</button></td></tr>`).join("") || '<tr><td colspan="8">暂无任务</td></tr>';
     return;
   }
+  if (state.view === "feedback") {
+    $("tableHead").innerHTML = "<tr><th>ID</th><th>用户</th><th>关联任务</th><th>分类</th><th>内容</th><th>状态</th><th>时间</th><th></th></tr>";
+    $("tableBody").innerHTML = state.feedback.map((ticket) => "<tr><td>#" + ticket.id + "</td><td><code>" + escapeHtml(ticket.openid) + "</code></td><td>" + escapeHtml(ticket.task_type) + " #" + ticket.task_id + "</td><td>" + escapeHtml(ticket.category) + "</td><td>" + escapeHtml(ticket.content) + "</td><td>" + feedbackStatusTag(ticket.status) + "</td><td>" + formatDate(ticket.created_at) + "</td><td><button class=\"action\" data-feedback=\"" + ticket.id + "\">处理</button></td></tr>").join("") || "<tr><td colspan=\"8\">暂无工单</td></tr>";
+    return;
+  }
   $("tableHead").innerHTML = "<tr><th>ID</th><th>用户</th><th>媒体</th><th>状态</th><th>算力</th><th>时间</th><th></th></tr>";
   $("tableBody").innerHTML = state.jobs.map((job) => `<tr><td>#${job.id}</td><td><code>${escapeHtml(job.openid)}</code></td><td>${job.mode === "video" ? "视频" : "图片"}</td><td>${statusTag(job.status)}</td><td>${job.cost}</td><td>${formatDate(job.created_at)}</td><td>${job.status === "succeeded" ? `<button class="action" data-refund="${job.id}">退款</button>` : ""}</td></tr>`).join("") || '<tr><td colspan="7">暂无任务</td></tr>';
 }
@@ -118,12 +124,15 @@ async function load() {
       ? request(`/api/admin/users?query=${encodeURIComponent($("searchInput").value)}`)
       : state.view === "operations"
         ? request(`/api/admin/operations/tasks?status=${encodeURIComponent($("statusSelect").value)}&task_type=${encodeURIComponent($("taskTypeSelect").value)}&query=${encodeURIComponent($("searchInput").value)}&created_after=${encodeURIComponent(toUtcIso($("createdAfter").value))}&created_before=${encodeURIComponent(toUtcIso($("createdBefore").value))}&failure=${encodeURIComponent($("failureInput").value)}&limit=${state.taskLimit}&offset=${state.taskOffset}`)
+        : state.view === "feedback"
+          ? request("/api/admin/feedback?status=" + encodeURIComponent($("statusSelect").value) + "&query=" + encodeURIComponent($("searchInput").value) + "&limit=" + state.taskLimit + "&offset=" + state.taskOffset)
         : request(`/api/admin/jobs?status=${encodeURIComponent($("statusSelect").value)}`);
     const [overview, analytics, list] = await Promise.all([request("/api/admin/overview"), request("/api/admin/analytics"), listRequest]);
     renderMetrics(overview, analytics);
     renderAnalytics(analytics);
     if (state.view === "users") state.users = list;
     else if (state.view === "operations") { state.tasks = list.items || []; state.taskTotal = list.total || 0; renderPagination(); }
+    else if (state.view === "feedback") { state.feedback = list.items || []; state.taskTotal = list.total || 0; renderPagination(); }
     else state.jobs = list;
     renderTable();
   } catch (error) {
@@ -135,7 +144,7 @@ async function load() {
 }
 
 function renderPagination() {
-  const visible = state.view === "operations";
+  const visible = state.view === "operations" || state.view === "feedback";
   $("pagination").hidden = !visible;
   if (!visible) return;
   const start = state.taskTotal ? state.taskOffset + 1 : 0;
@@ -238,8 +247,8 @@ document.addEventListener("DOMContentLoaded", () => {
     $("createdAfter").hidden = state.view !== "operations";
     $("createdBefore").hidden = state.view !== "operations";
     $("failureInput").hidden = state.view !== "operations";
-    $("pagination").hidden = state.view !== "operations";
-    $("searchInput").placeholder = state.view === "operations" ? "搜索任务 ID / 用户 / 文件名" : "搜索用户 ID / openid";
+    $("pagination").hidden = state.view !== "operations" && state.view !== "feedback";
+    $("searchInput").placeholder = state.view === "operations" ? "搜索任务 ID / 用户 / 文件名" : state.view === "feedback" ? "搜索工单 / 用户 / 内容" : "搜索用户 ID / openid";
     document.querySelectorAll(".tab").forEach((item) => item.classList.toggle("active", item === button));
     load();
   }));
@@ -267,6 +276,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     const task = event.target.closest("[data-task-type]");
     if (task) await openTask(task.dataset.taskType, task.dataset.taskId);
+    const feedback = event.target.closest("[data-feedback]");
+    if (feedback) await openFeedback(feedback.dataset.feedback);
   });
   if (state.token) showApp();
 });
@@ -288,6 +299,39 @@ async function openTask(taskType, taskId) {
       await openTask(type, id);
       await load();
     }));
+  } catch (error) { toast(error.message); }
+}
+
+function feedbackStatusTag(status) {
+  const labels = { open: ["待处理", "warn"], in_progress: ["处理中", "warn"], resolved: ["已解决", "ok"], closed: ["已关闭", "bad"] };
+  const item = labels[status] || [status, "warn"];
+  return '<span class="status ' + item[1] + '">' + escapeHtml(item[0]) + '</span>';
+}
+
+async function openFeedback(id) {
+  try {
+    const data = await request("/api/admin/feedback/" + id);
+    const ticket = data.ticket;
+    $("drawerTitle").textContent = "工单 #" + ticket.id;
+    const audits = data.audits.map((item) => '<div class="detail-row"><span>' + escapeHtml(item.action + " · " + item.reason) + '</span><strong>' + formatDate(item.created_at) + '</strong></div>').join("") || '<div class="empty-state">暂无操作</div>';
+    $("drawerBody").innerHTML = '<div class="detail-card"><div class="detail-row"><span>用户</span><strong>' + escapeHtml(ticket.openid) + '</strong></div><div class="detail-row"><span>关联任务</span><strong>' + escapeHtml(ticket.task_type) + ' #' + ticket.task_id + '</strong></div><div class="detail-row"><span>分类</span><strong>' + escapeHtml(ticket.category) + '</strong></div><div class="detail-row"><span>状态</span>' + feedbackStatusTag(ticket.status) + '</div><div class="detail-row"><span>反馈内容</span><strong>' + escapeHtml(ticket.content) + '</strong></div><div class="detail-row"><span>标签</span><strong>' + escapeHtml(ticket.admin_tags || "-") + '</strong></div><div class="detail-row"><span>回复</span><strong>' + escapeHtml(ticket.reply || "-") + '</strong></div></div><div class="drawer-actions"><button class="action" id="editFeedback">处理工单</button></div><div class="detail-card"><p class="kicker">操作审计</p>' + audits + '</div>';
+    $("drawer").hidden = false;
+    $("editFeedback").addEventListener("click", async () => {
+      const status = window.prompt("状态：open / in_progress / resolved / closed", ticket.status);
+      if (!["open", "in_progress", "resolved", "closed"].includes(status)) return toast("状态不正确");
+      const admin_tags = window.prompt("标签，使用逗号分隔", ticket.admin_tags || "");
+      if (admin_tags === null) return;
+      const reply = window.prompt("用户可见回复", ticket.reply || "");
+      if (reply === null) return;
+      const admin_note = window.prompt("仅管理员可见备注", ticket.admin_note || "");
+      if (admin_note === null) return;
+      const reason = window.prompt("处理说明", "已处理用户反馈");
+      if (!reason) return;
+      await request("/api/admin/feedback/" + ticket.id, { method: "PATCH", body: JSON.stringify({ status, admin_tags, reply, admin_note, reason }) });
+      toast("工单已更新");
+      await openFeedback(ticket.id);
+      await load();
+    });
   } catch (error) { toast(error.message); }
 }
 

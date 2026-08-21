@@ -109,4 +109,5 @@ Page({
     } catch (error) { wx.showToast({ title: error.message || "保存失败", icon: "none" }); }
     finally { this.setData({ projectSaving: false }); }
   }
+  ,openFeedback() { wx.navigateTo({ url: "/pages/feedback/feedback?taskType=job&taskId=" + this.jobId }); }
 });

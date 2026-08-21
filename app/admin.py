@@ -50,6 +50,14 @@ class UserStatusUpdate(BaseModel):
     reason: str = Field(min_length=2, max_length=200)
 
 
+class FeedbackUpdate(BaseModel):
+    status: str = Field(pattern="^(open|in_progress|resolved|closed)$")
+    admin_tags: str = Field(default="", max_length=300)
+    admin_note: str = Field(default="", max_length=2000)
+    reply: str = Field(default="", max_length=2000)
+    reason: str = Field(min_length=2, max_length=200)
+
+
 def verify_password(password: str, encoded: str) -> bool:
     try:
         algorithm, iterations, salt, digest = encoded.split("$", 3)
@@ -473,6 +481,68 @@ async def unblock_user(user_id: int, body: UserStatusUpdate | None = None, admin
         write_audit_log(db, admin, "unblock", "user", user_id, user_id, body.reason if body else "后台解除封禁（未填写原因）")
         db.commit()
     return {"user_id": user_id, "is_blocked": False}
+
+
+@admin_router.get("/feedback")
+async def feedback_tickets(status: str = "", query: str = "", limit: int = 50, offset: int = 0, _: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
+    allowed_statuses = {"open", "in_progress", "resolved", "closed"}
+    if status and status not in allowed_statuses:
+        raise HTTPException(status_code=400, detail="不支持的工单状态")
+    limit = max(1, min(limit, 200))
+    offset = max(0, min(offset, 100000))
+    clauses: list[str] = []
+    params: list[Any] = []
+    if status:
+        clauses.append("f.status=?")
+        params.append(status)
+    if query.strip():
+        pattern = "%" + query.strip() + "%"
+        clauses.append("(CAST(f.id AS TEXT) LIKE ? OR CAST(f.task_id AS TEXT) LIKE ? OR CAST(f.user_id AS TEXT) LIKE ? OR f.content LIKE ? OR f.admin_tags LIKE ? OR u.openid LIKE ?)")
+        params.extend([pattern, pattern, pattern, pattern, pattern, pattern])
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
+    with connect() as db:
+        total = db.execute("SELECT COUNT(*) FROM feedback_tickets f JOIN users u ON u.id=f.user_id" + where, params).fetchone()[0]
+        rows = db.execute(
+            "SELECT f.id,f.user_id,f.task_type,f.task_id,f.category,f.content,f.status,f.admin_tags,f.reply,f.replied_at,f.created_at,f.updated_at,u.openid "
+            "FROM feedback_tickets f JOIN users u ON u.id=f.user_id" + where + " ORDER BY f.id DESC LIMIT ? OFFSET ?",
+            [*params, limit, offset],
+        ).fetchall()
+    return {"items": [row_dict(row) for row in rows], "total": total, "limit": limit, "offset": offset}
+
+
+@admin_router.get("/feedback/{ticket_id}")
+async def feedback_ticket_detail(ticket_id: int, _: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
+    with connect() as db:
+        row = db.execute(
+            "SELECT f.*,u.openid,u.credits,u.is_blocked FROM feedback_tickets f JOIN users u ON u.id=f.user_id WHERE f.id=?",
+            (ticket_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="工单不存在")
+        audits = db.execute(
+            "SELECT id,admin_username,action,reason,metadata_json,created_at FROM admin_audit_logs WHERE target_type='feedback_ticket' AND target_id=? ORDER BY id DESC LIMIT 50",
+            (str(ticket_id),),
+        ).fetchall()
+    return {"ticket": row_dict(row), "audits": [row_dict(item) for item in audits]}
+
+
+@admin_router.patch("/feedback/{ticket_id}")
+async def update_feedback_ticket(ticket_id: int, body: FeedbackUpdate, admin: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
+    now = utc_now().isoformat()
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute("SELECT * FROM feedback_tickets WHERE id=?", (ticket_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="工单不存在")
+        reply = body.reply.strip()
+        db.execute(
+            "UPDATE feedback_tickets SET status=?,admin_tags=?,admin_note=?,reply=?,replied_at=?,replied_by=?,updated_at=? WHERE id=?",
+            (body.status, body.admin_tags.strip(), body.admin_note.strip(), reply, now if reply else None, admin["username"] if reply else None, now, ticket_id),
+        )
+        write_audit_log(db, admin, "feedback_update", "feedback_ticket", ticket_id, row["user_id"], body.reason, {"status": body.status, "tags": body.admin_tags.strip(), "has_reply": bool(reply)})
+        db.commit()
+        updated = db.execute("SELECT * FROM feedback_tickets WHERE id=?", (ticket_id,)).fetchone()
+    return row_dict(updated)
 
 
 @admin_router.get("/jobs")

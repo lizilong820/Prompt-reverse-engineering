@@ -26,4 +26,5 @@ Page({
     if (!(await ensurePrivacyAuthorized())) return;
     wx.setClipboardData({ data: this.data.prompt });
   }
+  ,openFeedback() { wx.navigateTo({ url: "/pages/feedback/feedback?taskType=replication_diagnostic&taskId=" + this.id }); }
 });
