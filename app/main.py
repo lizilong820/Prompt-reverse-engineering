@@ -71,6 +71,7 @@ class PromptBundle(BaseModel):
     video: str
     chinese: str = ""
     english: str = ""
+    platforms: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 
 class AnalysisResponse(BaseModel):
@@ -140,7 +141,30 @@ def make_prompts(analysis: VisualAnalysis, video_prompt: bool = False) -> Prompt
     flux = f"A cinematic editorial image of {analysis.subject}, in {analysis.scene}. {analysis.composition}. {analysis.camera}. {analysis.lighting}. Color palette: {analysis.color}. Style: {analysis.style}. Details: {details}. Avoid {negative}."
     timeline = " ".join(f"{item.start}-{item.end}: {item.description}; camera: {item.camera_motion}; subject: {item.subject_motion}." for item in analysis.timeline)
     video = analysis.prompt_zh if video_prompt and analysis.prompt_zh else f"{analysis.subject}. {analysis.scene}. {analysis.composition}. {analysis.camera}. {analysis.lighting}. Preserve identity, wardrobe and spatial continuity. {timeline} 24fps, realistic motion blur, cinematic pacing. Avoid {negative}."
-    return PromptBundle(universal=universal, midjourney=midjourney, flux=flux, video=video, chinese=universal, english=english)
+    video_en = analysis.prompt_en if video_prompt and analysis.prompt_en else f"{analysis.subject}. {analysis.scene}. {analysis.composition}. {analysis.camera}. {analysis.lighting}. Preserve identity, wardrobe and spatial continuity. {timeline} 24fps, realistic motion blur, cinematic pacing. Avoid {negative}."
+    image_jimeng = f"主体：{analysis.subject}\n场景：{analysis.scene}\n构图：{analysis.composition}\n镜头：{analysis.camera}\n光影：{analysis.lighting}\n色彩与风格：{analysis.color}，{analysis.style}\n细节：{details}\n负面约束：{negative}"
+    video_kling = f"生成一段连续视频。主体：{analysis.subject}。场景：{analysis.scene}。首帧构图：{analysis.composition}。镜头：{analysis.camera}。光影：{analysis.lighting}。{timeline} 保持人物身份、服装、空间结构和光线连续，动作自然，运动速度真实，避免闪烁、变形、跳帧和新增内容。"
+    video_jimeng = f"画面主体：{analysis.subject}。环境：{analysis.scene}。起始构图：{analysis.composition}。运镜方式：{analysis.camera}。光影与色彩：{analysis.lighting}，{analysis.color}。动作推进：{timeline} 画面节奏连贯，主体动作清楚，保持外观、服装、场景和光线稳定，结尾自然停稳。"
+    video_hailuo = f"电影感连续镜头，{analysis.subject}，位于{analysis.scene}。开场画面：{analysis.composition}。镜头语言：{analysis.camera}。光线与风格：{analysis.lighting}，{analysis.style}。时间推进：{timeline} 强调真实运动惯性、自然表情和衣物动态，保持人物与背景一致，避免闪烁、肢体畸变和场景漂移。"
+    video_runway = f"A continuous cinematic video of {analysis.subject} in {analysis.scene}. Start with {analysis.composition}. Camera: {analysis.camera}. Lighting: {analysis.lighting}. Maintain identity, wardrobe, spatial continuity and stable geometry. Timeline: {timeline} Natural motion, realistic speed, consistent temporal detail, no cuts, no morphing, no extra subjects."
+    video_veo = f"Create a coherent video shot of {analysis.subject} in {analysis.scene}. Shot composition: {analysis.composition}. Camera direction: {analysis.camera}. Lighting and color: {analysis.lighting}; {analysis.color}. Action progression: {timeline} Preserve physical continuity, identity, wardrobe and background geometry. Use natural motion blur and end in a stable final state."
+    if video_prompt:
+        platforms = {
+            "universal": {"label": "通用", "zh": video, "en": video_en},
+            "kling": {"label": "可灵", "zh": video_kling, "en": video_en},
+            "jimeng": {"label": "即梦", "zh": video_jimeng, "en": video_en},
+            "hailuo": {"label": "海螺", "zh": video_hailuo, "en": video_en},
+            "runway": {"label": "Runway", "zh": video, "en": video_runway},
+            "veo": {"label": "Veo", "zh": video, "en": video_veo},
+        }
+    else:
+        platforms = {
+            "universal": {"label": "通用", "zh": universal, "en": english},
+            "midjourney": {"label": "Midjourney", "zh": midjourney, "en": midjourney},
+            "flux": {"label": "Flux", "zh": flux, "en": flux},
+            "jimeng": {"label": "即梦", "zh": image_jimeng, "en": english},
+        }
+    return PromptBundle(universal=universal, midjourney=midjourney, flux=flux, video=video, chinese=universal, english=english, platforms=platforms)
 
 
 def as_data_url(content: bytes, content_type: str) -> str:

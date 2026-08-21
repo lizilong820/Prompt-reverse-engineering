@@ -929,6 +929,13 @@ async def depth_job_artifact(local_job_id: int, artifact: str, user: dict[str, A
 
 def job_payload(row: sqlite3.Row, include_result: bool = True) -> dict[str, Any]:
     result = json.loads(row["result_json"]) if include_result and row["result_json"] else None
+    if result and result.get("prompts") and not result["prompts"].get("platforms"):
+        try:
+            from app.main import VisualAnalysis, make_prompts
+            analysis = VisualAnalysis.model_validate(result["analysis"])
+            result["prompts"] = make_prompts(analysis, video_prompt=row["mode"] == "video" or row["analysis_task"] == "image_expand_video").model_dump()
+        except Exception:
+            logger.exception("Unable to backfill platform prompts for job %s", row["id"])
     keys = set(row.keys())
     return {"id": row["id"], "mode": row["mode"], "filename": row["filename"], "cost": row["cost"], "status": row["status"], "result": result, "error_message": row["error_message"], "analysis_depth": row["analysis_depth"] if "analysis_depth" in keys else "detailed", "analysis_task": row["analysis_task"] if "analysis_task" in keys else "reconstruct", "source_type": row["source_type"] if "source_type" in keys else "upload", "source_platform": row["source_platform"] if "source_platform" in keys else None, "created_at": row["created_at"]}
 
