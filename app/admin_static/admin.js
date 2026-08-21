@@ -1,19 +1,233 @@
-const state = { token: localStorage.getItem("prompt-lens-admin-token") || "", view: "users", users: [], jobs: [] };
+const state = {
+  token: localStorage.getItem("prompt-lens-admin-token") || "",
+  view: "users",
+  users: [],
+  jobs: [],
+};
+
 const $ = (id) => document.getElementById(id);
 const labels = { processing: ["处理中", "warn"], succeeded: ["已完成", "ok"], failed: ["已失败", "bad"] };
-function toast(message) { const node = $("toast"); node.textContent = message; node.classList.add("show"); clearTimeout(toast.timer); toast.timer = setTimeout(() => node.classList.remove("show"), 2600); }
-async function request(path, options = {}) { const response = await fetch(path, { ...options, headers: { "Content-Type": "application/json", "X-Admin-Token": state.token, ...(options.headers || {}) } }); const data = await response.json().catch(() => ({})); if (!response.ok) { const error = new Error(data.detail || "请求失败"); error.status = response.status; throw error; } return data; }
-function renderMetrics(data) { const items = [["users", "用户总数", data.users, data.active_users + " 个正常"], ["jobs", "分析任务", data.jobs, "处理中 " + data.processing], ["succeeded", "完成任务", data.succeeded, "失败 " + data.failed], ["credits", "用户持有积分", data.credits, "累计消耗 " + data.consumed_credits], ["ad_claims", "广告奖励次数", data.ad_claims, "每日上限 " + data.ad_daily_limit]]; $("metrics").innerHTML = items.map((item) => "<div class=\"metric\"><label>" + item[1] + "</label><strong>" + item[2] + "</strong><small>" + item[3] + "</small></div>").join(""); }
-function statusTag(status) { const value = labels[status] || [status, "warn"]; return "<span class=\"status " + value[1] + "\">" + value[0] + "</span>"; }
-function renderTable() { const table = $("dataTable"); table.hidden = false; $("tableState").hidden = true; if (state.view === "users") { $("tableHead").innerHTML = "<tr><th>ID</th><th>OpenID</th><th>积分</th><th>状态</th><th>注册时间</th><th></th></tr>"; $("tableBody").innerHTML = state.users.map((user) => "<tr><td>#" + user.id + "</td><td><code>" + user.openid + "</code></td><td><strong>" + user.credits + "</strong></td><td>" + (user.is_blocked ? "<span class=\"status bad\">已封禁</span>" : "<span class=\"status ok\">正常</span>") + "</td><td>" + new Date(user.created_at).toLocaleString() + "</td><td><button class=\"action\" data-user=\"" + user.id + "\">查看</button></td></tr>").join("") || "<tr><td colspan=\"6\">暂无用户</td></tr>"; } else { $("tableHead").innerHTML = "<tr><th>ID</th><th>用户</th><th>媒体</th><th>状态</th><th>积分</th><th>时间</th><th></th></tr>"; $("tableBody").innerHTML = state.jobs.map((job) => "<tr><td>#" + job.id + "</td><td><code>" + job.openid + "</code></td><td>" + (job.mode === "video" ? "视频" : "图片") + "</td><td>" + statusTag(job.status) + "</td><td>" + job.cost + "</td><td>" + new Date(job.created_at).toLocaleString() + "</td><td>" + (job.status === "succeeded" ? "<button class=\"action\" data-refund=\"" + job.id + "\">退款</button>" : "") + "</td></tr>").join("") || "<tr><td colspan=\"7\">暂无任务</td></tr>"; } }
-async function load() { try { renderMetrics(await request("/api/admin/overview")); if (state.view === "users") state.users = await request("/api/admin/users?query=" + encodeURIComponent($("searchInput").value)); else state.jobs = await request("/api/admin/jobs?status=" + encodeURIComponent($("statusSelect").value)); renderTable(); } catch (error) { if (error.status === 401) return showLogin(); toast(error.message); } }
-function showLogin() { $("loginView").hidden = false; $("appView").hidden = true; localStorage.removeItem("prompt-lens-admin-token"); state.token = ""; }
-function showApp() { $("loginView").hidden = true; $("appView").hidden = false; load(); }
-async function login(event) { event.preventDefault(); $("loginError").textContent = ""; try { const data = await request("/api/admin/login", { method: "POST", body: JSON.stringify({ username: $("username").value, password: $("password").value }), headers: { "X-Admin-Token": "" } }); state.token = data.token; localStorage.setItem("prompt-lens-admin-token", state.token); showApp(); } catch (error) { $("loginError").textContent = error.message; } }
-async function openUser(id) { const data = await request("/api/admin/users/" + id); const user = data.user; $("drawerTitle").textContent = "用户 #" + user.id; $("drawerBody").innerHTML = "<div class=\"detail-card\"><div class=\"detail-row\"><span>OpenID</span><strong>" + user.openid + "</strong></div><div class=\"detail-row\"><span>当前积分</span><strong>" + user.credits + "</strong></div><div class=\"detail-row\"><span>状态</span><strong>" + (user.is_blocked ? "已封禁" : "正常") + "</strong></div><div class=\"detail-row\"><span>注册时间</span><strong>" + new Date(user.created_at).toLocaleString() + "</strong></div></div><div class=\"drawer-actions\"><button class=\"action\" data-adjust=\"" + user.id + "\">调整积分</button><button class=\"action\" data-block=\"" + user.id + "\" data-blocked=\"" + user.is_blocked + "\">" + (user.is_blocked ? "解除封禁" : "封禁用户") + "</button></div><div class=\"detail-card\"><p class=\"kicker\">最近流水</p>" + data.ledger.slice(0, 10).map((item) => "<div class=\"detail-row\"><span>" + item.reason + "</span><strong>" + (item.amount > 0 ? "+" : "") + item.amount + "</strong></div>").join("") + "</div>"; $("drawer").hidden = false; }
-function openCredit(id) { $("creditUserId").value = id; $("creditAmount").value = ""; $("creditReason").value = ""; $("creditError").textContent = ""; $("modal").hidden = false; }
-async function adjustCredit(event) { event.preventDefault(); try { await request("/api/admin/users/" + $("creditUserId").value + "/credits", { method: "POST", body: JSON.stringify({ amount: Number($("creditAmount").value), reason: $("creditReason").value }) }); $("modal").hidden = true; toast("积分已调整"); await load(); } catch (error) { $("creditError").textContent = error.message; } }
-document.addEventListener("DOMContentLoaded", () => { $("loginForm").addEventListener("submit", login); $("logoutButton").addEventListener("click", async () => { try { await request("/api/admin/logout", { method: "POST" }); } finally { showLogin(); } }); $("refreshButton").addEventListener("click", load); $("searchButton").addEventListener("click", load); $("closeDrawer").addEventListener("click", () => { $("drawer").hidden = true; }); $("closeModal").addEventListener("click", () => { $("modal").hidden = true; }); $("creditForm").addEventListener("submit", adjustCredit); document.querySelectorAll(".tab").forEach((button) => button.addEventListener("click", () => { state.view = button.dataset.view; document.querySelectorAll(".tab").forEach((item) => item.classList.toggle("active", item === button)); load(); })); document.addEventListener("click", async (event) => { const user = event.target.closest("[data-user]"); if (user) openUser(user.dataset.user); const adjust = event.target.closest("[data-adjust]"); if (adjust) openCredit(adjust.dataset.adjust); const block = event.target.closest("[data-block]"); if (block) { const endpoint = block.dataset.blocked === "1" ? "unblock" : "block"; await request("/api/admin/users/" + block.dataset.block + "/" + endpoint, { method: "POST" }); toast("用户状态已更新"); await openUser(block.dataset.block); await load(); } const refund = event.target.closest("[data-refund]"); if (refund) { if (!window.confirm("确认给该任务退款？")) return; await request("/api/admin/jobs/" + refund.dataset.refund + "/refund", { method: "POST" }); toast("已退款"); await load(); } }); if (state.token) showApp(); });
-async function loadConfigStatus() { try { const config = await request("/api/admin/config"); const missing = []; if (!config.openai_configured) missing.push("OPENAI_API_KEY"); if (!config.wechat_configured) missing.push("WX_APP_ID / WX_APP_SECRET"); if (!config.ad_configured) missing.push("WX_AD_UNIT_ID"); const notice = $("configNotice"); if (config.environment === "development" || missing.length) { notice.hidden = false; notice.innerHTML = "<strong>部署状态：</strong>" + (config.environment === "development" ? "当前仍是开发环境；" : "生产环境；") + (missing.length ? "待配置 " + missing.join("、") + "。未配置的能力不会返回演示数据。" : "核心配置已就绪。"); } else { notice.hidden = true; } } catch (error) { if (error.status === 401) showLogin(); } }
-document.addEventListener("DOMContentLoaded", () => { if (state.token) loadConfigStatus(); });
-function showApp() { $("loginView").hidden = true; $("appView").hidden = false; loadConfigStatus(); load(); }
+const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
+const formatDate = (value) => value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "-";
+const formatDuration = (seconds) => {
+  const value = Number(seconds) || 0;
+  if (value < 60) return `${Math.round(value)} 秒`;
+  if (value < 3600) return `${Math.round(value / 60)} 分钟`;
+  return `${(value / 3600).toFixed(1)} 小时`;
+};
+
+function toast(message) {
+  const node = $("toast");
+  node.textContent = message;
+  node.classList.add("show");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => node.classList.remove("show"), 2600);
+}
+
+async function request(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    headers: { "Content-Type": "application/json", "X-Admin-Token": state.token, ...(options.headers || {}) },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(data.detail || "请求失败");
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
+
+function renderMetrics(overview, analytics) {
+  const items = [
+    ["用户总数", overview.users, `今日新增 ${analytics.users.new_today}`],
+    ["今日活跃", analytics.users.active_today, `昨日新增 ${analytics.users.new_yesterday}`],
+    ["今日任务", analytics.today.total, `处理中 ${analytics.today.processing}`],
+    ["今日成功率", `${analytics.today.success_rate}%`, `失败 ${analytics.today.failed}`],
+    ["平均处理耗时", formatDuration(analytics.today.avg_duration_seconds), "已结束任务"],
+    ["今日算力消耗", analytics.credits.consumed, `退款 ${analytics.credits.refunded}`],
+  ];
+  $("metrics").innerHTML = items.map(([label, value, detail]) => `<div class="metric"><label>${escapeHtml(label)}</label><strong>${escapeHtml(value)}</strong><small>${escapeHtml(detail)}</small></div>`).join("");
+}
+
+function renderRateList(targetId, items) {
+  const target = $(targetId);
+  if (!items.length) {
+    target.innerHTML = '<div class="empty-state">暂无数据</div>';
+    return;
+  }
+  target.innerHTML = items.map((item) => {
+    const rate = Math.max(0, Math.min(100, Number(item.success_rate) || 0));
+    return `<div class="stat-row"><span>${escapeHtml(item.label)}</span><div class="progress ${rate < 70 ? "bad" : ""}"><span style="width:${rate}%"></span></div><strong>${rate}% · ${item.total}</strong></div>`;
+  }).join("");
+}
+
+function renderAnalytics(data) {
+  $("analyticsPanel").hidden = false;
+  $("analyticsGenerated").textContent = `更新于 ${formatDate(data.generated_at)}`;
+  const maxTotal = Math.max(1, ...data.trend.map((item) => item.total));
+  $("trendChart").innerHTML = data.trend.map((item) => {
+    const successHeight = Math.max(item.succeeded ? 4 : 2, item.succeeded * 100 / maxTotal);
+    const failedHeight = Math.max(item.failed ? 4 : 2, item.failed * 100 / maxTotal);
+    return `<div class="trend-day" title="${escapeHtml(item.day)}：成功 ${item.succeeded}，失败 ${item.failed}"><div class="trend-bars"><span class="trend-bar" style="height:${successHeight}%"></span><span class="trend-bar failed" style="height:${failedHeight}%"></span></div><span class="trend-label">${escapeHtml(item.day.slice(5))}<br>${item.total}</span></div>`;
+  }).join("");
+  renderRateList("taskTypeStats", data.task_types);
+  renderRateList("platformStats", data.platforms);
+  const maxFailure = Math.max(1, ...data.failures.map((item) => item.count));
+  $("failureStats").innerHTML = data.failures.length
+    ? data.failures.map((item) => `<div class="stat-row"><span>${escapeHtml(item.category)}</span><div class="progress bad"><span style="width:${item.count * 100 / maxFailure}%"></span></div><strong>${item.count}</strong></div>`).join("")
+    : '<div class="empty-state">近 7 日无失败任务</div>';
+  const alertCount = $("alertCount");
+  alertCount.textContent = data.alerts.length ? `${data.alerts.length} 项异常` : "运行正常";
+  alertCount.className = `status ${data.alerts.some((item) => item.severity === "critical") ? "bad" : data.alerts.length ? "warn" : "ok"}`;
+  $("alerts").innerHTML = data.alerts.length
+    ? data.alerts.map((item) => `<div class="alert-item ${item.severity === "critical" ? "critical" : ""}"><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.detail)}</p></div>`).join("")
+    : '<div class="alert-clear">当前未检测到异常</div>';
+}
+
+function statusTag(status) {
+  const value = labels[status] || [status, "warn"];
+  return `<span class="status ${value[1]}">${escapeHtml(value[0])}</span>`;
+}
+
+function renderTable() {
+  $("dataTable").hidden = false;
+  $("tableState").hidden = true;
+  if (state.view === "users") {
+    $("tableHead").innerHTML = "<tr><th>ID</th><th>OpenID</th><th>算力</th><th>状态</th><th>注册时间</th><th></th></tr>";
+    $("tableBody").innerHTML = state.users.map((user) => `<tr><td>#${user.id}</td><td><code>${escapeHtml(user.openid)}</code></td><td><strong>${user.credits}</strong></td><td>${user.is_blocked ? '<span class="status bad">已封禁</span>' : '<span class="status ok">正常</span>'}</td><td>${formatDate(user.created_at)}</td><td><button class="action" data-user="${user.id}">查看</button></td></tr>`).join("") || '<tr><td colspan="6">暂无用户</td></tr>';
+    return;
+  }
+  $("tableHead").innerHTML = "<tr><th>ID</th><th>用户</th><th>媒体</th><th>状态</th><th>算力</th><th>时间</th><th></th></tr>";
+  $("tableBody").innerHTML = state.jobs.map((job) => `<tr><td>#${job.id}</td><td><code>${escapeHtml(job.openid)}</code></td><td>${job.mode === "video" ? "视频" : "图片"}</td><td>${statusTag(job.status)}</td><td>${job.cost}</td><td>${formatDate(job.created_at)}</td><td>${job.status === "succeeded" ? `<button class="action" data-refund="${job.id}">退款</button>` : ""}</td></tr>`).join("") || '<tr><td colspan="7">暂无任务</td></tr>';
+}
+
+async function load() {
+  try {
+    $("refreshButton").disabled = true;
+    const listRequest = state.view === "users"
+      ? request(`/api/admin/users?query=${encodeURIComponent($("searchInput").value)}`)
+      : request(`/api/admin/jobs?status=${encodeURIComponent($("statusSelect").value)}`);
+    const [overview, analytics, list] = await Promise.all([request("/api/admin/overview"), request("/api/admin/analytics"), listRequest]);
+    renderMetrics(overview, analytics);
+    renderAnalytics(analytics);
+    if (state.view === "users") state.users = list;
+    else state.jobs = list;
+    renderTable();
+  } catch (error) {
+    if (error.status === 401) return showLogin();
+    toast(error.message);
+  } finally {
+    $("refreshButton").disabled = false;
+  }
+}
+
+async function loadConfigStatus() {
+  try {
+    const config = await request("/api/admin/config");
+    const missing = [];
+    if (!config.openai_configured) missing.push("OPENAI_API_KEY");
+    if (!config.wechat_configured) missing.push("WX_APP_ID / WX_APP_SECRET");
+    if (!config.ad_configured) missing.push("WX_AD_UNIT_ID");
+    const notice = $("configNotice");
+    if (config.environment === "development" || missing.length) {
+      notice.hidden = false;
+      notice.innerHTML = `<strong>部署状态：</strong>${config.environment === "development" ? "当前仍是开发环境；" : "生产环境；"}${missing.length ? `待配置 ${escapeHtml(missing.join("、"))}。` : "核心配置已就绪。"}`;
+    } else {
+      notice.hidden = true;
+    }
+  } catch (error) {
+    if (error.status === 401) showLogin();
+  }
+}
+
+function showLogin() {
+  $("loginView").hidden = false;
+  $("appView").hidden = true;
+  localStorage.removeItem("prompt-lens-admin-token");
+  state.token = "";
+}
+
+function showApp() {
+  $("loginView").hidden = true;
+  $("appView").hidden = false;
+  loadConfigStatus();
+  load();
+}
+
+async function login(event) {
+  event.preventDefault();
+  $("loginError").textContent = "";
+  try {
+    const data = await request("/api/admin/login", { method: "POST", body: JSON.stringify({ username: $("username").value, password: $("password").value }), headers: { "X-Admin-Token": "" } });
+    state.token = data.token;
+    localStorage.setItem("prompt-lens-admin-token", state.token);
+    showApp();
+  } catch (error) {
+    $("loginError").textContent = error.message;
+  }
+}
+
+async function openUser(id) {
+  const data = await request(`/api/admin/users/${id}`);
+  const user = data.user;
+  $("drawerTitle").textContent = `用户 #${user.id}`;
+  $("drawerBody").innerHTML = `<div class="detail-card"><div class="detail-row"><span>OpenID</span><strong>${escapeHtml(user.openid)}</strong></div><div class="detail-row"><span>当前算力</span><strong>${user.credits}</strong></div><div class="detail-row"><span>状态</span><strong>${user.is_blocked ? "已封禁" : "正常"}</strong></div><div class="detail-row"><span>注册时间</span><strong>${formatDate(user.created_at)}</strong></div></div><div class="drawer-actions"><button class="action" data-adjust="${user.id}">调整算力</button><button class="action" data-block="${user.id}" data-blocked="${user.is_blocked}">${user.is_blocked ? "解除封禁" : "封禁用户"}</button></div><div class="detail-card"><p class="kicker">最近流水</p>${data.ledger.slice(0, 10).map((item) => `<div class="detail-row"><span>${escapeHtml(item.reason)}</span><strong>${item.amount > 0 ? "+" : ""}${item.amount}</strong></div>`).join("") || '<div class="empty-state">暂无流水</div>'}</div>`;
+  $("drawer").hidden = false;
+}
+
+function openCredit(id) {
+  $("creditUserId").value = id;
+  $("creditAmount").value = "";
+  $("creditReason").value = "";
+  $("creditError").textContent = "";
+  $("modal").hidden = false;
+}
+
+async function adjustCredit(event) {
+  event.preventDefault();
+  try {
+    await request(`/api/admin/users/${$("creditUserId").value}/credits`, { method: "POST", body: JSON.stringify({ amount: Number($("creditAmount").value), reason: $("creditReason").value }) });
+    $("modal").hidden = true;
+    toast("算力已调整");
+    await load();
+  } catch (error) {
+    $("creditError").textContent = error.message;
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  $("loginForm").addEventListener("submit", login);
+  $("logoutButton").addEventListener("click", async () => { try { await request("/api/admin/logout", { method: "POST" }); } finally { showLogin(); } });
+  $("refreshButton").addEventListener("click", load);
+  $("searchButton").addEventListener("click", load);
+  $("closeDrawer").addEventListener("click", () => { $("drawer").hidden = true; });
+  $("closeModal").addEventListener("click", () => { $("modal").hidden = true; });
+  $("creditForm").addEventListener("submit", adjustCredit);
+  document.querySelectorAll(".tab").forEach((button) => button.addEventListener("click", () => {
+    state.view = button.dataset.view;
+    document.querySelectorAll(".tab").forEach((item) => item.classList.toggle("active", item === button));
+    load();
+  }));
+  document.addEventListener("click", async (event) => {
+    const user = event.target.closest("[data-user]");
+    if (user) await openUser(user.dataset.user);
+    const adjust = event.target.closest("[data-adjust]");
+    if (adjust) openCredit(adjust.dataset.adjust);
+    const block = event.target.closest("[data-block]");
+    if (block) {
+      const endpoint = block.dataset.blocked === "1" ? "unblock" : "block";
+      await request(`/api/admin/users/${block.dataset.block}/${endpoint}`, { method: "POST" });
+      toast("用户状态已更新");
+      await openUser(block.dataset.block);
+      await load();
+    }
+    const refund = event.target.closest("[data-refund]");
+    if (refund && window.confirm("确认给该任务退款？")) {
+      await request(`/api/admin/jobs/${refund.dataset.refund}/refund`, { method: "POST" });
+      toast("已退款");
+      await load();
+    }
+  });
+  if (state.token) showApp();
+});

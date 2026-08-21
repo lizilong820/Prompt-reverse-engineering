@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Prompt Lens · Admin</title>
-    <link rel="stylesheet" href="/admin/static/admin.css?v=20260818">
+    <link rel="stylesheet" href="/admin/static/admin.css?v=20260821">
   </head>
   <body>
     <div id="loginView" class="login-view">
@@ -12,7 +12,7 @@
         <div class="admin-mark">PL</div>
         <p class="kicker">PROMPT LENS / CONTROL ROOM</p>
         <h1>运营管理后台</h1>
-        <p class="login-copy">管理用户、积分账本和分析任务。</p>
+        <p class="login-copy">查看运营数据、异常告警并管理用户与任务。</p>
         <form id="loginForm">
           <label>管理员账号<input id="username" autocomplete="username" value="admin" required></label>
           <label>管理员密码<input id="password" type="password" autocomplete="current-password" required></label>
@@ -30,6 +30,28 @@
         <div class="page-title"><div><p class="kicker">OVERVIEW</p><h1>运营总览</h1></div><button id="refreshButton" class="ghost" type="button">↻ 刷新</button></div>
         <div id="configNotice" class="config-notice" hidden></div>
         <section class="metrics" id="metrics"></section>
+        <section class="analytics-grid" id="analyticsPanel" hidden>
+          <article class="analytics-card trend-card">
+            <div class="section-head"><div><p class="kicker">LAST 7 DAYS</p><h2>任务趋势</h2></div><span id="analyticsGenerated" class="muted"></span></div>
+            <div id="trendChart" class="trend-chart"></div>
+          </article>
+          <article class="analytics-card">
+            <div class="section-head"><div><p class="kicker">TASK TYPES</p><h2>类型成功率</h2></div></div>
+            <div id="taskTypeStats" class="stat-list"></div>
+          </article>
+          <article class="analytics-card">
+            <div class="section-head"><div><p class="kicker">FAILURE TOP</p><h2>失败原因 Top 10</h2></div></div>
+            <div id="failureStats" class="stat-list"></div>
+          </article>
+          <article class="analytics-card">
+            <div class="section-head"><div><p class="kicker">VIDEO SOURCES</p><h2>平台解析率</h2></div></div>
+            <div id="platformStats" class="stat-list"></div>
+          </article>
+          <article class="analytics-card wide-card">
+            <div class="section-head"><div><p class="kicker">ALERTS</p><h2>异常告警</h2></div><span id="alertCount" class="status ok">正常</span></div>
+            <div id="alerts" class="alerts"></div>
+          </article>
+        </section>
         <section class="toolbar">
           <div class="tabs"><button class="tab active" data-view="users" type="button">用户</button><button class="tab" data-view="jobs" type="button">分析任务</button></div>
           <div class="filters"><input id="searchInput" placeholder="搜索用户 ID / openid"><select id="statusSelect"><option value="">全部状态</option><option value="processing">处理中</option><option value="succeeded">已完成</option><option value="failed">已失败</option></select><button id="searchButton" class="ghost" type="button">查询</button></div>
@@ -38,8 +60,8 @@
       </main>
     </div>
     <div id="drawer" class="drawer" hidden><div class="drawer-head"><div><p class="kicker">DETAIL</p><h2 id="drawerTitle">用户详情</h2></div><button id="closeDrawer" class="icon" type="button">×</button></div><div id="drawerBody"></div></div>
-    <div id="modal" class="modal-backdrop" hidden><div class="modal"><div class="drawer-head"><h2>调整积分</h2><button id="closeModal" class="icon" type="button">×</button></div><form id="creditForm"><input id="creditUserId" type="hidden"><label>变动数量<input id="creditAmount" type="number" required placeholder="正数增加，负数扣除"></label><label>操作原因<input id="creditReason" required placeholder="例如：活动补偿"></label><button class="primary" type="submit">确认调整</button></form><p id="creditError" class="form-error"></p></div></div>
+    <div id="modal" class="modal-backdrop" hidden><div class="modal"><div class="drawer-head"><h2>调整算力</h2><button id="closeModal" class="icon" type="button">×</button></div><form id="creditForm"><input id="creditUserId" type="hidden"><label>变动数量<input id="creditAmount" type="number" required placeholder="正数增加，负数扣除"></label><label>操作原因<input id="creditReason" required placeholder="例如：活动补偿"></label><button class="primary" type="submit">确认调整</button></form><p id="creditError" class="form-error"></p></div></div>
     <div id="toast" class="toast"></div>
-    <script src="/admin/static/admin.js?v=20260818"></script>
+    <script src="/admin/static/admin.js?v=20260821"></script>
   </body>
 </html>
