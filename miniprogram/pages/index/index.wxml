@@ -9,6 +9,5 @@
   <view wx:else class="link-source"><textarea value="{{videoLink}}" bindinput="onVideoLinkInput" maxlength="4096" placeholder="粘贴抖音/快手/小红书/视频号分享链接，或输入视频直链" /><text>仅支持公开内容，私密或需登录的视频无法解析。</text></view>
   <view class="flow"><view class="flow-item active"><text>01</text><label>上传</label></view><view class="flow-line"></view><view class="flow-item {{submitting ? 'active' : ''}}"><text>02</text><label>拆解</label></view><view class="flow-line"></view><view class="flow-item"><text>03</text><label>输出</label></view></view>
   <button class="primary submit" bindtap="submit" disabled="{{submitting || (sourceMode === 'upload' ? !filePath : !videoLink)}}">{{submitting ? '正在提交 ' + progress + '%' : mode === 'image' && imageTask === 'image_expand_video' ? '消耗 1 次算力生成10秒视频提示词' : '消耗 1 次算力开始反推'}}</button>
-  <button wx:if="{{computeCount < 1}}" class="secondary ad-action" bindtap="watchRewardAd">次数不足 · 看广告增加 1 次</button>
   <view class="notice">分析失败自动返还 · 每日最多观看 20 次激励广告</view>
 </view>
