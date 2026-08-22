@@ -215,6 +215,12 @@ def contains_cjk(value: str) -> bool:
     return any("\u4e00" <= char <= "\u9fff" for char in value)
 
 
+def english_value(value: str, fallback: str) -> str:
+    """Use an analysis field only when it is genuinely English."""
+    cleaned = (value or "").strip()
+    return cleaned if cleaned and not contains_cjk(cleaned) else fallback
+
+
 def english_timeline(analysis: VisualAnalysis) -> str:
     segments: list[str] = []
     for item in analysis.timeline:
@@ -232,6 +238,11 @@ def make_prompts(analysis: VisualAnalysis, video_prompt: bool = False) -> Prompt
     negative_en = ", ".join(item for item in analysis.negative_prompt if item and not contains_cjk(item)) or "text, logo, watermark, artifacts"
     universal = analysis.prompt_zh or f"{analysis.subject}。{analysis.scene}。{analysis.composition}。{analysis.camera}。{analysis.lighting}。{analysis.color}。{analysis.style}。细节：{details_zh}。"
     english = analysis.prompt_en.strip() if analysis.prompt_en and not contains_cjk(analysis.prompt_en) else "A coherent visual scene featuring the analyzed subject, with consistent environment, composition, camera, lighting, color, and style."
+    camera_en = english_value(analysis.camera, "a smooth cinematic camera move")
+    lighting_en = english_value(analysis.lighting, "consistent soft cinematic lighting")
+    color_en = english_value(analysis.color, "a coherent natural color palette")
+    style_en = english_value(analysis.style, "a polished cinematic visual style")
+    composition_en = english_value(analysis.composition, "the analyzed composition and framing")
     midjourney_zh = f"{analysis.subject}，{analysis.scene}，{analysis.composition}，{analysis.camera}，{analysis.lighting}，{analysis.style}，{details_zh}。--ar 4:5 --stylize 180 --no {negative_zh}"
     midjourney_en = f"{english} --ar 4:5 --stylize 180 --no {negative_en}"
     flux_zh = f"电影感编辑摄影：{analysis.subject}，位于{analysis.scene}。{analysis.composition}。{analysis.camera}。{analysis.lighting}。色彩：{analysis.color}。风格：{analysis.style}。细节：{details_zh}。避免：{negative_zh}。"
@@ -242,22 +253,66 @@ def make_prompts(analysis: VisualAnalysis, video_prompt: bool = False) -> Prompt
     video_en = f"{english} Preserve identity, wardrobe and spatial continuity. {timeline_en} 24fps, realistic motion blur, cinematic pacing. Avoid {negative_en}."
     image_jimeng = f"主体：{analysis.subject}\n场景：{analysis.scene}\n构图：{analysis.composition}\n镜头：{analysis.camera}\n光影：{analysis.lighting}\n色彩与风格：{analysis.color}，{analysis.style}\n细节：{details_zh}\n负面约束：{negative_zh}"
     image_jimeng_en = f"Create a structured Jimeng image prompt. Visual description: {english}\nDetails: {details_en}\nNegative constraints: {negative_en}"
-    video_kling = f"生成一段连续视频。主体：{analysis.subject}。场景：{analysis.scene}。首帧构图：{analysis.composition}。镜头：{analysis.camera}。光影：{analysis.lighting}。{timeline_zh} 保持人物身份、服装、空间结构和光线连续，动作自然，避免闪烁、变形、跳帧和新增内容。"
-    video_kling_en = f"Create a continuous Kling video. Subject and scene: {english}. Start from the analyzed composition and preserve identity, wardrobe, spatial layout, and lighting. Timeline: {timeline_en} Use coherent motion, stable geometry, and no flicker, morphing, frame jumps, or extra subjects."
-    video_jimeng = f"画面主体：{analysis.subject}。环境：{analysis.scene}。起始构图：{analysis.composition}。运镜方式：{analysis.camera}。光影与色彩：{analysis.lighting}，{analysis.color}。动作推进：{timeline_zh} 画面节奏连贯，保持外观、服装、场景和光线稳定。"
-    video_jimeng_en = f"Create a structured Jimeng video prompt. Subject and environment: {english}. Define the opening composition, camera movement, lighting, and color clearly. Action timeline: {timeline_en} Keep the pacing coherent and preserve the subject appearance, wardrobe, background, and light throughout."
-    video_hailuo = f"电影感连续镜头，{analysis.subject}，位于{analysis.scene}。开场画面：{analysis.composition}。镜头语言：{analysis.camera}。光线与风格：{analysis.lighting}，{analysis.style}。时间推进：{timeline_zh} 强调真实运动惯性，保持人物与背景一致，避免闪烁、肢体畸变和场景漂移。"
-    video_hailuo_en = f"Create a cinematic Hailuo shot featuring {english}. Open with the analyzed composition and use expressive but physically believable camera language. Lighting and style should remain consistent. Timeline: {timeline_en} Emphasize natural inertia, stable identity and background continuity, with no flicker, limb distortion, or scene drift."
-    video_runway = f"Create a continuous cinematic Runway video from this visual description: {english} Maintain identity, wardrobe, spatial continuity, and stable geometry. Timeline: {timeline_en} Use natural motion, realistic speed, consistent temporal detail, no cuts, no morphing, and no extra subjects."
-    video_veo = f"Create a coherent Veo video from this visual description: {english} Action progression: {timeline_en} Preserve physical continuity, identity, wardrobe, and background geometry. Use natural motion blur and end in a stable final state."
+    video_kling = (
+        f"主体：{analysis.subject}。动作：{timeline_zh or '主体进行自然、连续的动作'}。"
+        f"场景：{analysis.scene}。镜头：{analysis.camera}。光线：{analysis.lighting}。"
+        f"要求动作与镜头同步推进，保持人物身份、服装、空间结构和光线连续，避免闪烁、变形、跳帧和新增主体。"
+    )
+    video_kling_en = (
+        f"SUBJECT: {english} ACTION: {timeline_en} SCENE: Preserve the analyzed environment. "
+        f"CAMERA: Follow the analyzed camera movement. LIGHTING: Keep the original lighting direction and exposure. "
+        f"Maintain identity, wardrobe and spatial continuity. Avoid flicker, morphing, frame jumps and extra subjects."
+    )
+    video_jimeng = (
+        f"首帧画面：{analysis.composition}，{analysis.subject}位于{analysis.scene}。"
+        f"画面动作：{timeline_zh or '主体做出连贯自然的动作'}。运镜：{analysis.camera}。"
+        f"色彩与光影：{analysis.color}，{analysis.lighting}。结尾保持主体和场景稳定，适合图生视频连续生成。"
+    )
+    video_jimeng_en = (
+        f"OPENING FRAME: {composition_en}. SUBJECT: {english}. ACTION PROGRESSION: {timeline_en} "
+        f"CAMERA CHOREOGRAPHY: {camera_en}. VISUAL TREATMENT: {color_en}; {lighting_en}; {style_en}. "
+        f"End on a stable frame with the same subject, wardrobe and environment."
+    )
+    video_hailuo = (
+        f"电影感连续镜头：{analysis.subject}在{analysis.scene}中完成{timeline_zh or '自然连续的动作'}。"
+        f"以{analysis.composition}开场，采用{analysis.camera}，{analysis.lighting}与{analysis.style}保持统一。"
+        f"强调真实惯性、节奏变化和前后帧衔接，避免背景漂移、肢体畸变、闪烁和突然切镜。"
+    )
+    video_hailuo_en = (
+        f"HAILUO CINEMATIC SEQUENCE. Establish {composition_en} with {english}. "
+        f"PACING AND INERTIA: {timeline_en} Use visible acceleration, deceleration and believable momentum. "
+        f"Keep {lighting_en}, {style_en}, the background and subject identity stable; avoid drift, distortion, flicker and abrupt cuts."
+    )
+    video_runway = (
+        f"Animate the analyzed image with this motion only: {timeline_zh or '主体进行自然连续运动'}。"
+        f"Camera motion：{analysis.camera}。Maintain the existing composition, subject, lighting and style."
+        f"Use direct temporal instructions, realistic speed and stable geometry; no new objects, no morphing, no cuts."
+    )
+    video_runway_en = (
+        f"RUNWAY IMAGE-TO-VIDEO MOTION INSTRUCTIONS. Do not redesign the supplied image. "
+        f"MOTION ONLY: {timeline_en} CAMERA: {camera_en}. "
+        f"Preserve {composition_en}, the subject identity, wardrobe and {lighting_en}. "
+        f"Use direct temporal motion, realistic speed and stable geometry; no new objects, morphing, reframing or cuts."
+    )
+    video_veo = (
+        f"镜头设定：{analysis.composition}。主体与环境：{analysis.subject}，{analysis.scene}。"
+        f"动作时间线：{timeline_zh or '从开场到结尾保持连续自然运动'}。运镜：{analysis.camera}。"
+        f"光影与色彩：{analysis.lighting}，{analysis.color}。保持物理连续性、人物一致性和背景几何稳定，结尾自然停稳。"
+    )
+    video_veo_en = (
+        f"VEO SHOT SPECIFICATION, 10 seconds. SUBJECT AND SETTING: {english}. "
+        f"COMPOSITION: {composition_en}. ACTION TIMELINE: {timeline_en} "
+        f"CAMERA: {camera_en}. LIGHTING AND COLOR: {lighting_en}; {color_en}. "
+        f"Maintain physical continuity, identity and background geometry. End in a calm final state."
+    )
     if video_prompt:
         platforms = {
             "universal": {"label": "通用", "zh": video, "en": video_en},
             "kling": {"label": "可灵", "zh": video_kling, "en": video_kling_en},
             "jimeng": {"label": "即梦", "zh": video_jimeng, "en": video_jimeng_en},
             "hailuo": {"label": "海螺", "zh": video_hailuo, "en": video_hailuo_en},
-            "runway": {"label": "Runway", "zh": video, "en": video_runway},
-            "veo": {"label": "Veo", "zh": video, "en": video_veo},
+            "runway": {"label": "Runway", "zh": video_runway, "en": video_runway_en},
+            "veo": {"label": "Veo", "zh": video_veo, "en": video_veo_en},
         }
     else:
         platforms = {
