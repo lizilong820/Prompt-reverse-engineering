@@ -321,7 +321,15 @@ def make_prompts(analysis: VisualAnalysis, video_prompt: bool = False) -> Prompt
             "flux": {"label": "Flux", "zh": flux_zh, "en": flux_en},
             "jimeng": {"label": "即梦", "zh": image_jimeng, "en": image_jimeng_en},
         }
-    return PromptBundle(universal=universal, midjourney=midjourney, flux=flux, video=video, chinese=universal, english=english, platforms=platforms)
+    return PromptBundle(
+        universal=universal,
+        midjourney=midjourney_zh,
+        flux=flux_zh,
+        video=video,
+        chinese=universal,
+        english=english,
+        platforms=platforms,
+    )
 
 
 async def optimize_existing_prompt(analysis: dict[str, Any], source_prompt: dict[str, str], strategy: str, platform_label: str, is_video: bool) -> dict[str, str]:
