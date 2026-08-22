@@ -17,7 +17,7 @@ Page({
         api("/api/v1/depth/jobs"),
         api("/api/v1/replication-diagnostics")
       ]);
-      const analysisLabels = { succeeded: "已完成", failed: "已返还", processing: "分析中" };
+      const analysisLabels = { succeeded: "已完成", failed: "已返还", processing: "分析中", queued: "等待中", submitting: "提交中" };
       const depthLabels = { completed: "已完成", expired: "已过期", failed: "已返还", submitting: "提交中", queued: "等待中", downloading: "下载中", loading_model: "加载模型", processing: "处理中", encoding: "编码中", finalizing: "保存结果中" };
       const depthPresetLabels = { quick_preview: "快速预览", standard_depth: "标准深度", motion_character: "人物动作" };
       const records = [
@@ -26,7 +26,7 @@ Page({
           recordKey: "analysis-" + job.id,
           recordType: "analysis",
           title: job.analysis_task === "image_expand_video" ? "画面拓展" : job.mode === "video" ? "视频反推" : "图片反推",
-          statusText: analysisLabels[job.status] || job.status,
+          statusText: analysisLabels[job.status] || "处理中",
           statusClass: this.getStatusClass(job.status),
           createdText: new Date(job.created_at).toLocaleString()
         })),
@@ -35,7 +35,7 @@ Page({
           recordKey: "depth-" + job.id,
           recordType: "depth",
           title: "视频深度转换 · " + (depthPresetLabels[job.preset] || "标准深度"),
-          statusText: depthLabels[job.status] || job.status,
+          statusText: depthLabels[job.status] || "处理中",
           statusClass: this.getStatusClass(job.status),
           createdText: new Date(job.created_at).toLocaleString()
         })),
@@ -45,7 +45,7 @@ Page({
           recordType: "diagnostic",
           title: "视频复刻诊断",
           filename: [job.original_filename, job.generated_filename].filter(Boolean).join(" / ") || "等待上传",
-          statusText: analysisLabels[job.status] || (job.status === "awaiting_upload" ? "等待上传" : job.status),
+          statusText: analysisLabels[job.status] || (job.status === "awaiting_upload" ? "等待上传" : "处理中"),
           statusClass: this.getStatusClass(job.status),
           createdText: new Date(job.created_at).toLocaleString()
         }))
