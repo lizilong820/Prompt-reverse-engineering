@@ -1,6 +1,7 @@
 const { api } = require("../../utils/api");
 const { ensurePrivacyAuthorized } = require("../../utils/privacy");
 const OPTIMIZATION_LABELS = { action: "强化动作", camera: "强化运镜", identity: "人物一致", style: "风格强化", concise: "精简提示词", professional: "专业扩写" };
+const hasCjk = (value) => /[\u3400-\u9fff]/.test(String(value || ""));
 Page({
   data: {
     job: null, analysis: { timeline: [] }, facts: [], prompt: "", promptZh: "", promptEn: "", language: "zh",
@@ -24,7 +25,7 @@ Page({
       const prompts = job.result.prompts || {};
       const isVideoPrompt = job.mode === "video" || job.analysis_task === "image_expand_video";
       const promptZh = isVideoPrompt ? (prompts.video || prompts.chinese || "") : (prompts.chinese || "");
-      const promptEn = prompts.english || "";
+      const promptEn = prompts.english && !hasCjk(prompts.english) ? prompts.english : "";
       const platforms = prompts.platforms || { universal: { label: "通用", zh: promptZh, en: promptEn } };
       const platformOptions = Object.keys(platforms).map((key) => ({ key, label: platforms[key].label || key }));
       const platform = platformOptions[0]?.key || "universal";
@@ -42,11 +43,11 @@ Page({
     if (versionKey !== "base") {
       const id = Number(versionKey.replace("optimization-", ""));
       const item = optimizations.find((entry) => entry.id === id);
-      if (item?.result?.[language]) return item.result[language];
+      if (item?.result?.[language] && (language !== "en" || !hasCjk(item.result[language]))) return item.result[language];
       if (language === "en") return "English prompt is unavailable for this version.";
     }
     const selected = this.data.platforms[platform] || {};
-    if (selected[language]) return selected[language];
+    if (selected[language] && (language !== "en" || !hasCjk(selected[language]))) return selected[language];
     if (language === "en") return this.data.promptEn || "English prompt is unavailable for this platform.";
     return selected.zh || this.data.promptZh || "中文提示词暂不可用";
   },
