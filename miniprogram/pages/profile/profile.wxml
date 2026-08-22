@@ -1,6 +1,11 @@
 <view class="page">
   <view class="profile-head"><view class="avatar">PL</view><view><text class="eyebrow">MY ACCOUNT</text><view class="section-title">我的算力</view></view></view>
   <view class="balance"><text>当前算力次数</text><strong>{{computeCount}}</strong><small>图片、视频和深度工具均消耗 1 次</small></view>
+  <view class="referral-card">
+    <view class="referral-head"><view><text class="menu-title">邀请好友得算力</text><text class="menu-meta">好友填写你的邀请码后，你获得 {{referral.reward}} 次算力</text></view><text class="referral-count">{{referral.invited_count}} 人</text></view>
+    <view class="referral-code"><text>{{referral.code || "生成中"}}</text><button bindtap="copyReferralCode" size="mini">复制</button></view>
+    <button class="referral-bind" bindtap="bindReferral" disabled="{{referral.bound}}">{{referral.bound ? "已填写过邀请码" : "填写好友邀请码"}}</button>
+  </view>
   <view class="stats"><view><strong>{{totalCount}}</strong><text>累计任务</text></view><view><strong>{{jobs.length}}</strong><text>提示词反推</text></view><view><strong>{{depthJobs.length + diagnosticJobs.length}}</strong><text>创作工具</text></view></view>
   <view class="menu-section">
     <view class="menu-button" hover-class="menu-button-hover" bindtap="openHistory"><view><text class="menu-title">最近记录</text><text class="menu-meta">{{totalCount}} 条任务记录</text></view><text class="menu-arrow">›</text></view>

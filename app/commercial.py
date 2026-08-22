@@ -44,6 +44,7 @@ VIDEO_CREDIT_COST = int(os.getenv("VIDEO_CREDIT_COST", "1"))
 AD_REWARD_CREDITS = int(os.getenv("AD_REWARD_CREDITS", "1"))
 AD_DAILY_LIMIT = int(os.getenv("AD_DAILY_LIMIT", "20"))
 AD_COOLDOWN_SECONDS = int(os.getenv("AD_COOLDOWN_SECONDS", "3"))
+REFERRAL_REWARD_CREDITS = int(os.getenv("REFERRAL_REWARD_CREDITS", "3"))
 DEPTH_COMPUTE_COST = int(os.getenv("DEPTH_COMPUTE_COST", "1"))
 PROMPT_OPTIMIZATION_COST = int(os.getenv("PROMPT_OPTIMIZATION_COST", "1"))
 REPLICATION_DIAGNOSTIC_COST = int(os.getenv("REPLICATION_DIAGNOSTIC_COST", "1"))
@@ -131,6 +132,10 @@ class FeedbackCreateRequest(BaseModel):
     task_id: int = Field(gt=0)
     category: str = Field(pattern="^(result|performance|billing|feature|other)$")
     content: str = Field(min_length=5, max_length=2000)
+
+
+class ReferralBindRequest(BaseModel):
+    code: str = Field(min_length=4, max_length=32)
 
 
 def depth_processing_options(preset: str, invert: bool, aspect_ratio: str, export_frames: bool) -> dict[str, int | float | bool | str]:
@@ -357,6 +362,22 @@ def connect() -> sqlite3.Connection:
             created_at TEXT NOT NULL,
             UNIQUE(reference_type, reference_id, role)
         );
+        CREATE TABLE IF NOT EXISTS referral_codes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL UNIQUE REFERENCES users(id),
+            code TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS referral_bindings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            inviter_user_id INTEGER NOT NULL REFERENCES users(id),
+            invitee_user_id INTEGER NOT NULL UNIQUE REFERENCES users(id),
+            code TEXT NOT NULL,
+            inviter_reward INTEGER NOT NULL DEFAULT 3,
+            status TEXT NOT NULL DEFAULT 'completed' CHECK(status IN ('completed','revoked')),
+            created_at TEXT NOT NULL,
+            UNIQUE(inviter_user_id, invitee_user_id)
+        );
         CREATE INDEX IF NOT EXISTS idx_jobs_user_created ON jobs(user_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_ledger_user_created ON credit_ledger(user_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_depth_jobs_user_created ON depth_jobs(user_id, id DESC);
@@ -371,6 +392,8 @@ def connect() -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_announcements_status_time ON announcements(status, starts_at, ends_at);
         CREATE INDEX IF NOT EXISTS idx_moderation_previews_created ON moderation_previews(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_moderation_previews_expires ON moderation_previews(expires_at);
+        CREATE INDEX IF NOT EXISTS idx_referral_bindings_inviter ON referral_bindings(inviter_user_id, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_referral_bindings_created ON referral_bindings(created_at DESC);
     """)
     try:
         db.execute("ALTER TABLE users ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0")
@@ -504,6 +527,36 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+REFERRAL_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def ensure_referral_code(db: sqlite3.Connection, user_id: int) -> str:
+    row = db.execute("SELECT code FROM referral_codes WHERE user_id=?", (user_id,)).fetchone()
+    if row:
+        return str(row["code"])
+    for _ in range(20):
+        code = "".join(secrets.choice(REFERRAL_ALPHABET) for _ in range(8))
+        try:
+            db.execute("INSERT INTO referral_codes(user_id,code,created_at) VALUES(?,?,?)", (user_id, code, utc_now().isoformat()))
+            return code
+        except sqlite3.IntegrityError:
+            continue
+    raise HTTPException(status_code=500, detail="邀请码生成失败，请稍后重试")
+
+
+def referral_payload(db: sqlite3.Connection, user_id: int) -> dict[str, Any]:
+    code = ensure_referral_code(db, user_id)
+    invited_count = db.execute("SELECT COUNT(*) FROM referral_bindings WHERE inviter_user_id=? AND status='completed'", (user_id,)).fetchone()[0]
+    binding = db.execute("SELECT id,code,created_at,status FROM referral_bindings WHERE invitee_user_id=?", (user_id,)).fetchone()
+    return {
+        "code": code,
+        "reward": REFERRAL_REWARD_CREDITS,
+        "invited_count": int(invited_count),
+        "bound": bool(binding),
+        "bound_at": binding["created_at"] if binding else None,
+    }
+
+
 def change_credits(db: sqlite3.Connection, user_id: int, amount: int, reason: str, reference_type: str, reference_id: str, idempotency_key: str) -> int:
     existing = db.execute("SELECT balance_after FROM credit_ledger WHERE idempotency_key=?", (idempotency_key,)).fetchone()
     if existing:
@@ -559,6 +612,7 @@ async def wechat_login(body: LoginRequest) -> dict[str, Any]:
             change_credits(db, user_id, WELCOME_CREDITS, "welcome_bonus", "user", str(user_id), f"welcome:{user_id}")
         else:
             user_id = int(user["id"])
+        ensure_referral_code(db, user_id)
         db.execute("DELETE FROM sessions WHERE expires_at<=?", (now.isoformat(),))
         db.execute("INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)", (hash_token(token), user_id, (now + timedelta(days=SESSION_DAYS)).isoformat(), now.isoformat()))
         credits = db.execute("SELECT credits FROM users WHERE id=?", (user_id,)).fetchone()["credits"]
@@ -571,7 +625,49 @@ async def me(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     today = utc_now().date().isoformat()
     with connect() as db:
         used = db.execute("SELECT COUNT(*) FROM reward_claims WHERE user_id=? AND status='claimed' AND substr(claimed_at,1,10)=?", (user["id"], today)).fetchone()[0]
-    return {"id": user["id"], "credits": user["credits"], "compute_count": user["credits"], "pricing": {"image": IMAGE_CREDIT_COST, "video": VIDEO_CREDIT_COST, "depth": DEPTH_COMPUTE_COST, "optimization": PROMPT_OPTIMIZATION_COST, "diagnostic": REPLICATION_DIAGNOSTIC_COST}, "ad": {"reward": AD_REWARD_CREDITS, "daily_limit": AD_DAILY_LIMIT, "remaining_today": max(0, AD_DAILY_LIMIT - used)}}
+        referral = referral_payload(db, user["id"])
+        credits = db.execute("SELECT credits FROM users WHERE id=?", (user["id"],)).fetchone()["credits"]
+    return {"id": user["id"], "credits": credits, "compute_count": credits, "pricing": {"image": IMAGE_CREDIT_COST, "video": VIDEO_CREDIT_COST, "depth": DEPTH_COMPUTE_COST, "optimization": PROMPT_OPTIMIZATION_COST, "diagnostic": REPLICATION_DIAGNOSTIC_COST}, "ad": {"reward": AD_REWARD_CREDITS, "daily_limit": AD_DAILY_LIMIT, "remaining_today": max(0, AD_DAILY_LIMIT - used)}, "referral": referral}
+
+
+@commercial_router.get("/referrals")
+async def referrals(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    with connect() as db:
+        payload = referral_payload(db, user["id"])
+        rows = db.execute(
+            "SELECT b.id,b.code,b.inviter_reward,b.status,b.created_at,u.id AS invitee_id,u.openid AS invitee_openid "
+            "FROM referral_bindings b JOIN users u ON u.id=b.invitee_user_id WHERE b.inviter_user_id=? ORDER BY b.id DESC LIMIT 100",
+            (user["id"],),
+        ).fetchall()
+    payload["bindings"] = [{"id": r["id"], "invitee_id": r["invitee_id"], "invitee": str(r["invitee_openid"])[-6:], "reward": r["inviter_reward"], "status": r["status"], "created_at": r["created_at"]} for r in rows]
+    return payload
+
+
+@commercial_router.post("/referrals/bind")
+async def bind_referral(body: ReferralBindRequest, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    code = body.code.strip().upper()
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        existing = db.execute("SELECT id,code,status FROM referral_bindings WHERE invitee_user_id=?", (user["id"],)).fetchone()
+        if existing:
+            db.rollback()
+            return {"bound": True, "already_bound": True, "reward": REFERRAL_REWARD_CREDITS, "message": "你已绑定过邀请码"}
+        inviter = db.execute("SELECT u.id,u.is_blocked FROM referral_codes c JOIN users u ON u.id=c.user_id WHERE c.code=?", (code,)).fetchone()
+        if not inviter:
+            db.rollback()
+            raise HTTPException(status_code=404, detail="邀请码不存在")
+        if int(inviter["id"]) == int(user["id"]):
+            db.rollback()
+            raise HTTPException(status_code=400, detail="不能填写自己的邀请码")
+        if inviter["is_blocked"]:
+            db.rollback()
+            raise HTTPException(status_code=400, detail="该邀请码暂不可用")
+        now = utc_now().isoformat()
+        cursor = db.execute("INSERT INTO referral_bindings(inviter_user_id,invitee_user_id,code,inviter_reward,status,created_at) VALUES(?,?,?,?,?,?)", (inviter["id"], user["id"], code, REFERRAL_REWARD_CREDITS, "completed", now))
+        binding_id = int(cursor.lastrowid)
+        inviter_balance = change_credits(db, inviter["id"], REFERRAL_REWARD_CREDITS, "referral_reward", "referral_binding", str(binding_id), f"referral:reward:{binding_id}")
+        db.commit()
+    return {"bound": True, "already_bound": False, "reward": REFERRAL_REWARD_CREDITS, "message": "邀请码绑定成功，邀请人已获得 3 次算力"}
 
 
 @commercial_router.post("/rewards/ad/prepare")

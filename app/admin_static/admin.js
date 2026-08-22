@@ -8,6 +8,7 @@ const state = {
   upstream: [],
   ads: [],
   moderation: [],
+  referrals: [],
   contentSettings: [],
   announcements: [],
   editingAnnouncementId: null,
@@ -134,6 +135,11 @@ function renderTable() {
     $("tableBody").innerHTML = state.ads.map((item) => `<tr><td>#${item.id}</td><td><code>${escapeHtml(item.openid || item.user_id)}</code></td><td><strong>+${item.amount}</strong></td><td><span class="status ok">已领取</span></td><td>${formatDate(item.created_at)}</td><td>${escapeHtml(item.reference_type || "reward_claim")}</td></tr>`).join("") || '<tr><td colspan="6">暂无广告领取记录</td></tr>';
     return;
   }
+  if (state.view === "referrals") {
+    $("tableHead").innerHTML = "<tr><th>ID</th><th>邀请码</th><th>邀请人</th><th>被邀请人</th><th>奖励</th><th>状态</th><th>绑定时间</th></tr>";
+    $("tableBody").innerHTML = state.referrals.map((item) => `<tr><td>#${item.id}</td><td><code>${escapeHtml(item.code)}</code></td><td><code>${escapeHtml(item.inviter_openid)}</code><small class="table-sub">用户 #${item.inviter_id}</small></td><td><code>${escapeHtml(item.invitee_openid)}</code><small class="table-sub">用户 #${item.invitee_id}</small></td><td><strong>+${item.inviter_reward}</strong></td><td>${item.status === "completed" ? '<span class="status ok">已完成</span>' : '<span class="status bad">已撤销</span>'}</td><td>${formatDate(item.created_at)}</td></tr>`).join("") || '<tr><td colspan="7">暂无邀请绑定记录</td></tr>';
+    return;
+  }
   if (state.view === "moderation") {
     $("tableHead").innerHTML = "<tr><th>ID</th><th>用户</th><th>文件</th><th>类型</th><th>来源任务</th><th>状态</th><th>创建时间</th><th>过期时间</th><th></th></tr>";
     $("tableBody").innerHTML = state.moderation.map((item) => `<tr><td>#${item.id}</td><td><code>${escapeHtml(item.openid || item.user_id)}</code></td><td>${escapeHtml(item.original_filename || "-")}</td><td>${item.media_type === "video" ? "视频关键帧" : "图片预览"}</td><td>${escapeHtml(item.reference_type)} #${item.reference_id}${item.role !== "source" ? ` · ${escapeHtml(item.role)}` : ""}</td><td>${statusTag(item.status)}</td><td>${formatDate(item.created_at)}</td><td>${formatDate(item.expires_at)}</td><td><button class="action" data-moderation-preview="${item.id}">查看预览</button></td></tr>`).join("") || '<tr><td colspan="9">暂无审核预览</td></tr>';
@@ -165,7 +171,9 @@ async function load() {
           : state.view === "ads"
             ? request("/api/admin/audit/credits?kind=ad&query=" + encodeURIComponent($("searchInput").value) + "&limit=" + state.taskLimit + "&offset=" + state.taskOffset)
             : state.view === "moderation"
-              ? request(`/api/admin/moderation/previews?query=${encodeURIComponent($("searchInput").value)}&limit=${state.taskLimit}&offset=${state.taskOffset}`)
+            ? request(`/api/admin/moderation/previews?query=${encodeURIComponent($("searchInput").value)}&limit=${state.taskLimit}&offset=${state.taskOffset}`)
+              : state.view === "referrals"
+                ? request(`/api/admin/referrals?query=${encodeURIComponent($("searchInput").value)}&limit=${state.taskLimit}&offset=${state.taskOffset}`)
           : state.view === "upstream"
           ? request("/api/admin/monitoring/upstream")
         : request(`/api/admin/jobs?status=${encodeURIComponent($("statusSelect").value)}`);
@@ -180,6 +188,7 @@ async function load() {
     else if (state.view === "operations") { state.tasks = list.items || []; state.taskTotal = list.total || 0; renderPagination(); }
     else if (state.view === "ads") { state.ads = list.items || []; state.taskTotal = list.total || 0; renderPagination(); }
     else if (state.view === "moderation") { state.moderation = list.items || []; state.taskTotal = list.total || 0; renderPagination(); }
+    else if (state.view === "referrals") { state.referrals = list.items || []; state.taskTotal = list.total || 0; renderPagination(); }
     else if (state.view === "feedback") { state.feedback = list.items || []; state.taskTotal = list.total || 0; renderPagination(); }
     else if (state.view === "upstream") { state.upstream = list.services || []; renderPagination(); }
     else state.jobs = list;
@@ -353,14 +362,14 @@ document.addEventListener("DOMContentLoaded", () => {
     state.view = button.dataset.view;
     state.taskOffset = 0;
     $("taskTypeSelect").hidden = state.view !== "operations";
-    $("statusSelect").hidden = state.view === "users" || state.view === "ads" || state.view === "upstream" || state.view === "content";
+    $("statusSelect").hidden = state.view === "users" || state.view === "ads" || state.view === "referrals" || state.view === "upstream" || state.view === "content";
     $("createdAfter").hidden = state.view !== "operations";
     $("createdBefore").hidden = state.view !== "operations";
     $("failureInput").hidden = state.view !== "operations";
-    $("pagination").hidden = !["operations", "feedback", "ads", "moderation"].includes(state.view);
+    $("pagination").hidden = !["operations", "feedback", "ads", "moderation", "referrals"].includes(state.view);
     $("contentPanel").hidden = state.view !== "content";
     $("tablePanel").hidden = state.view === "content";
-    $("searchInput").placeholder = state.view === "operations" ? "搜索任务 ID / 用户 / 文件名" : state.view === "feedback" ? "搜索工单 / 用户 / 内容" : state.view === "ads" ? "搜索广告记录 / 用户 / reference_id" : state.view === "moderation" ? "搜索用户 / 文件名 / 任务 ID" : "搜索用户 ID / openid";
+    $("searchInput").placeholder = state.view === "operations" ? "搜索任务 ID / 用户 / 文件名" : state.view === "feedback" ? "搜索工单 / 用户 / 内容" : state.view === "ads" ? "搜索广告记录 / 用户 / reference_id" : state.view === "moderation" ? "搜索用户 / 文件名 / 任务 ID" : state.view === "referrals" ? "搜索邀请码 / 邀请人 / 被邀请人" : "搜索用户 ID / openid";
     document.querySelectorAll(".tab").forEach((item) => item.classList.toggle("active", item === button));
     load();
   }));

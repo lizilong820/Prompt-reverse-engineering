@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
-from app.commercial import AD_DAILY_LIMIT, IMAGE_CREDIT_COST, VIDEO_CREDIT_COST, MODERATION_PREVIEW_DIR, cleanup_expired_moderation_previews, change_credits, connect, hash_token, utc_now
+from app.commercial import AD_DAILY_LIMIT, IMAGE_CREDIT_COST, VIDEO_CREDIT_COST, MODERATION_PREVIEW_DIR, REFERRAL_REWARD_CREDITS, cleanup_expired_moderation_previews, change_credits, connect, hash_token, utc_now
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD_HASH = os.getenv("ADMIN_PASSWORD_HASH", "").strip()
@@ -230,7 +230,19 @@ async def overview(_: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
         credits = db.execute("SELECT COALESCE(SUM(credits),0) FROM users").fetchone()[0]
         consumed = db.execute("SELECT COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END),0) FROM credit_ledger").fetchone()[0]
         ad_claims = db.execute("SELECT COUNT(*) FROM reward_claims WHERE status='claimed'").fetchone()[0]
-    return {"users": users, "active_users": active_users, "jobs": jobs, "depth_jobs": depth_jobs, "succeeded": succeeded, "processing": processing, "failed": failed, "credits": credits, "compute_count": credits, "consumed_credits": consumed, "ad_claims": ad_claims, "ad_daily_limit": AD_DAILY_LIMIT}
+        referral_bindings = db.execute("SELECT COUNT(*) FROM referral_bindings WHERE status='completed'").fetchone()[0]
+        referral_rewards = db.execute("SELECT COALESCE(SUM(inviter_reward),0) FROM referral_bindings WHERE status='completed'").fetchone()[0]
+    return {"users": users, "active_users": active_users, "jobs": jobs, "depth_jobs": depth_jobs, "succeeded": succeeded, "processing": processing, "failed": failed, "credits": credits, "compute_count": credits, "consumed_credits": consumed, "ad_claims": ad_claims, "ad_daily_limit": AD_DAILY_LIMIT, "referral_bindings": referral_bindings, "referral_rewards": referral_rewards, "referral_reward": REFERRAL_REWARD_CREDITS}
+
+
+@admin_router.get("/referrals")
+async def referrals(limit: int = 100, offset: int = 0, query: str = "", _: dict[str, str] = Depends(admin_user)) -> dict[str, Any]:
+    limit = max(1, min(limit, 200)); offset = max(0, offset)
+    pattern = f"%{query.strip()}%"
+    with connect() as db:
+        total = db.execute("SELECT COUNT(*) FROM referral_bindings b JOIN users i ON i.id=b.inviter_user_id JOIN users e ON e.id=b.invitee_user_id WHERE i.openid LIKE ? OR e.openid LIKE ? OR b.code LIKE ?", (pattern, pattern, pattern)).fetchone()[0]
+        rows = db.execute("SELECT b.id,b.code,b.inviter_reward,b.status,b.created_at,i.id AS inviter_id,i.openid AS inviter_openid,e.id AS invitee_id,e.openid AS invitee_openid FROM referral_bindings b JOIN users i ON i.id=b.inviter_user_id JOIN users e ON e.id=b.invitee_user_id WHERE i.openid LIKE ? OR e.openid LIKE ? OR b.code LIKE ? ORDER BY b.id DESC LIMIT ? OFFSET ?", (pattern, pattern, pattern, limit, offset)).fetchall()
+    return {"total": total, "items": [row_dict(row) for row in rows]}
 
 
 @admin_router.get("/analytics")
@@ -607,7 +619,11 @@ async def user_detail(user_id: int, _: dict[str, str] = Depends(admin_user)) -> 
         ads = db.execute("SELECT id,status,expires_at,claimed_at,created_at FROM reward_claims WHERE user_id=? ORDER BY id DESC LIMIT 50", (user_id,)).fetchall()
         projects = db.execute("SELECT id,title,note,is_favorite,recent_platform,created_at,updated_at FROM creative_projects WHERE user_id=? ORDER BY updated_at DESC LIMIT 50", (user_id,)).fetchall()
         audits = db.execute("SELECT id,admin_username,action,target_type,target_id,reason,metadata_json,created_at FROM admin_audit_logs WHERE user_id=? ORDER BY id DESC LIMIT 100", (user_id,)).fetchall()
-    return {"user": row_dict(user), "ledger": [row_dict(row) for row in ledger], "jobs": [row_dict(row) for row in jobs], "depth_jobs": [row_dict(row) for row in depth], "optimizations": [row_dict(row) for row in optimizations], "diagnostics": [row_dict(row) for row in diagnostics], "ads": [row_dict(row) for row in ads], "projects": [row_dict(row) for row in projects], "audits": [row_dict(row) for row in audits]}
+        referral_code = db.execute("SELECT code FROM referral_codes WHERE user_id=?", (user_id,)).fetchone()
+        invited = db.execute("SELECT b.id,b.code,b.inviter_reward,b.status,b.created_at,u.id AS invitee_id,u.openid AS invitee_openid FROM referral_bindings b JOIN users u ON u.id=b.invitee_user_id WHERE b.inviter_user_id=? ORDER BY b.id DESC LIMIT 50", (user_id,)).fetchall()
+        bound = db.execute("SELECT b.id,b.code,b.inviter_reward,b.status,b.created_at,u.id AS inviter_id,u.openid AS inviter_openid FROM referral_bindings b JOIN users u ON u.id=b.inviter_user_id WHERE b.invitee_user_id=?", (user_id,)).fetchone()
+    referral = {"code": referral_code["code"] if referral_code else None, "invited_count": len(invited), "invited": [row_dict(row) for row in invited], "bound": row_dict(bound) if bound else None}
+    return {"user": row_dict(user), "ledger": [row_dict(row) for row in ledger], "jobs": [row_dict(row) for row in jobs], "depth_jobs": [row_dict(row) for row in depth], "optimizations": [row_dict(row) for row in optimizations], "diagnostics": [row_dict(row) for row in diagnostics], "ads": [row_dict(row) for row in ads], "projects": [row_dict(row) for row in projects], "audits": [row_dict(row) for row in audits], "referral": referral}
 
 
 @admin_router.patch("/users/{user_id}/profile")
