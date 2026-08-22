@@ -8,6 +8,9 @@ const state = {
   upstream: [],
   ads: [],
   moderation: [],
+  contentSettings: [],
+  announcements: [],
+  editingAnnouncementId: null,
   taskTotal: 0,
   taskOffset: 0,
   taskLimit: 50,
@@ -111,6 +114,9 @@ function statusTag(status) {
 }
 
 function renderTable() {
+  $("contentPanel").hidden = state.view !== "content";
+  $("tablePanel").hidden = state.view === "content";
+  $("pagination").hidden = state.view === "content";
   $("dataTable").hidden = false;
   $("tableState").hidden = true;
   if (state.view === "users") {
@@ -163,6 +169,10 @@ async function load() {
           : state.view === "upstream"
           ? request("/api/admin/monitoring/upstream")
         : request(`/api/admin/jobs?status=${encodeURIComponent($("statusSelect").value)}`);
+    if (state.view === "content") {
+      await loadContent();
+      return;
+    }
     const [overview, analytics, list] = await Promise.all([request("/api/admin/overview"), request("/api/admin/analytics"), listRequest]);
     renderMetrics(overview, analytics);
     renderAnalytics(analytics);
@@ -180,6 +190,67 @@ async function load() {
   } finally {
     $("refreshButton").disabled = false;
   }
+}
+
+function localDateTime(value) {
+  return value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "立即";
+}
+
+function renderContent() {
+  $("contentPanel").hidden = false;
+  $("tablePanel").hidden = true;
+  const settings = state.contentSettings;
+  $("runtimeSettings").innerHTML = settings.length ? settings.map((item) => `<div class="setting-row"><label>${escapeHtml(item.setting_key)}<input data-setting-key="${escapeHtml(item.setting_key)}" value="${escapeHtml(item.setting_value)}"></label><div><small>${escapeHtml(item.updated_by || "-")} · ${formatDate(item.updated_at)}</small><button class="action" data-save-setting="${escapeHtml(item.setting_key)}">保存</button></div></div>`).join("") : '<div class="empty-state">暂无运行时配置，直接新增配置项：</div><div class="setting-row"><label>配置键<input data-setting-key="new"></label><div><small>首次保存后创建</small><button class="action" data-save-setting="new">保存</button></div></div>';
+  $("announcementList").innerHTML = state.announcements.length ? state.announcements.map((item) => `<div class="announcement-item"><div><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.content)}</p><small>${escapeHtml(item.status)} · ${escapeHtml(item.min_version || "不限版本")} · ${localDateTime(item.starts_at)} 至 ${item.ends_at ? localDateTime(item.ends_at) : "长期"}</small></div><button class="action" data-edit-announcement="${item.id}">编辑</button></div>`).join("") : '<div class="empty-state">暂无公告</div>';
+}
+
+async function loadContent() {
+  try {
+    const [settings, announcements] = await Promise.all([request("/api/admin/content/settings"), request("/api/admin/content/announcements")]);
+    state.contentSettings = settings;
+    state.announcements = announcements;
+    renderContent();
+  } catch (error) { if (error.status === 401) return showLogin(); toast(error.message); }
+}
+
+async function saveSetting(key, input) {
+  const settingKey = key === "new" ? input.closest(".setting-row").querySelector("[data-setting-key]").value.trim() : key;
+  if (!settingKey) return toast("配置键不能为空");
+  const reason = window.prompt("请输入配置修改原因", "运行时配置更新");
+  if (!reason) return;
+  await request(`/api/admin/content/settings/${encodeURIComponent(settingKey)}`, { method: "PUT", body: JSON.stringify({ value: input.value, reason }) });
+  toast("运行时配置已保存");
+  await loadContent();
+}
+
+async function saveAnnouncement(event) {
+  event.preventDefault();
+  $("announcementError").textContent = "";
+  try {
+    const payload = { title: $("announcementTitle").value.trim(), content: $("announcementContent").value.trim(), status: $("announcementStatus").value, min_version: $("announcementMinVersion").value.trim(), starts_at: $("announcementStartsAt").value ? new Date($("announcementStartsAt").value).toISOString() : null, ends_at: $("announcementEndsAt").value ? new Date($("announcementEndsAt").value).toISOString() : null, reason: $("announcementReason").value.trim() };
+    const endpoint = state.editingAnnouncementId ? `/api/admin/content/announcements/${state.editingAnnouncementId}` : "/api/admin/content/announcements";
+    await request(endpoint, { method: state.editingAnnouncementId ? "PATCH" : "POST", body: JSON.stringify(payload) });
+    state.editingAnnouncementId = null;
+    $("announcementForm").querySelector("button[type=submit]").textContent = "保存公告";
+    event.target.reset();
+    toast("公告已保存");
+    await loadContent();
+  } catch (error) { $("announcementError").textContent = error.message; }
+}
+
+function editAnnouncement(id) {
+  const item = state.announcements.find((entry) => String(entry.id) === String(id));
+  if (!item) return;
+  state.editingAnnouncementId = item.id;
+  $("announcementTitle").value = item.title || "";
+  $("announcementContent").value = item.content || "";
+  $("announcementStatus").value = item.status || "draft";
+  $("announcementMinVersion").value = item.min_version || "";
+  $("announcementStartsAt").value = item.starts_at ? new Date(item.starts_at).toISOString().slice(0, 16) : "";
+  $("announcementEndsAt").value = item.ends_at ? new Date(item.ends_at).toISOString().slice(0, 16) : "";
+  $("announcementReason").value = "更新公告状态或内容";
+  $("announcementForm").querySelector("button[type=submit]").textContent = "保存公告修改";
+  $("announcementTitle").focus();
 }
 
 function renderPagination() {
@@ -282,11 +353,13 @@ document.addEventListener("DOMContentLoaded", () => {
     state.view = button.dataset.view;
     state.taskOffset = 0;
     $("taskTypeSelect").hidden = state.view !== "operations";
-    $("statusSelect").hidden = state.view === "users" || state.view === "ads" || state.view === "upstream";
+    $("statusSelect").hidden = state.view === "users" || state.view === "ads" || state.view === "upstream" || state.view === "content";
     $("createdAfter").hidden = state.view !== "operations";
     $("createdBefore").hidden = state.view !== "operations";
     $("failureInput").hidden = state.view !== "operations";
     $("pagination").hidden = !["operations", "feedback", "ads", "moderation"].includes(state.view);
+    $("contentPanel").hidden = state.view !== "content";
+    $("tablePanel").hidden = state.view === "content";
     $("searchInput").placeholder = state.view === "operations" ? "搜索任务 ID / 用户 / 文件名" : state.view === "feedback" ? "搜索工单 / 用户 / 内容" : state.view === "ads" ? "搜索广告记录 / 用户 / reference_id" : state.view === "moderation" ? "搜索用户 / 文件名 / 任务 ID" : "搜索用户 ID / openid";
     document.querySelectorAll(".tab").forEach((item) => item.classList.toggle("active", item === button));
     load();
@@ -294,7 +367,13 @@ document.addEventListener("DOMContentLoaded", () => {
   $("searchButton").addEventListener("click", () => { state.taskOffset = 0; load(); });
   $("prevPage").addEventListener("click", () => { state.taskOffset = Math.max(0, state.taskOffset - state.taskLimit); load(); });
   $("nextPage").addEventListener("click", () => { state.taskOffset += state.taskLimit; load(); });
+  $("announcementForm").addEventListener("submit", saveAnnouncement);
+  $("contentRefresh").addEventListener("click", loadContent);
   document.addEventListener("click", async (event) => {
+    const setting = event.target.closest("[data-save-setting]");
+    if (setting) { const input = setting.closest(".setting-row").querySelector("input"); await saveSetting(setting.dataset.saveSetting, input); return; }
+    const announcement = event.target.closest("[data-edit-announcement]");
+    if (announcement) { editAnnouncement(announcement.dataset.editAnnouncement); return; }
     const user = event.target.closest("[data-user]");
     if (user) await openUser(user.dataset.user);
     const adjust = event.target.closest("[data-adjust]");
