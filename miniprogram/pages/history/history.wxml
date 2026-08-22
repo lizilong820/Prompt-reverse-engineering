@@ -4,7 +4,7 @@
     <view class="record {{(item.recordType === 'analysis' && item.status === 'succeeded') || (item.recordType === 'depth' && item.status === 'completed') || (item.recordType === 'diagnostic' && item.status === 'succeeded') ? 'clickable' : ''}}" wx:for="{{records}}" wx:key="recordKey" data-id="{{item.id}}" data-type="{{item.recordType}}" bindtap="openRecord">
       <view class="record-mark">{{item.recordType === 'depth' ? 'D/' : item.recordType === 'diagnostic' ? 'R/' : item.mode === 'video' ? 'V/' : 'I/'}}</view>
       <view class="record-copy"><strong>{{item.title}}</strong><text>{{item.filename}}</text><small>{{item.createdText}}</small></view>
-      <view class="record-state {{item.status === 'failed' ? 'failed' : ''}}">{{item.statusText}}</view>
+      <view class="record-state {{item.statusClass}}">{{item.statusText}}</view>
     </view>
   </view>
   <view wx:else class="empty">暂无任务记录</view>

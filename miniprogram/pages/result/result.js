@@ -23,12 +23,13 @@ Page({
       const analysis = job.result.analysis; const facts = [["主体 SUBJECT", "subject"], ["场景 SCENE", "scene"], ["构图 COMPOSITION", "composition"], ["镜头 CAMERA", "camera"], ["光线 LIGHTING", "lighting"], ["色彩 COLOR", "color"], ["风格 STYLE", "style"]].map(([label, key]) => ({ label, value: analysis[key] }));
       const prompts = job.result.prompts || {};
       const isVideoPrompt = job.mode === "video" || job.analysis_task === "image_expand_video";
-      const promptZh = isVideoPrompt ? (prompts.video || prompts.chinese || prompts.universal || "") : (prompts.chinese || prompts.universal || "");
-      const promptEn = prompts.english || prompts.universal || prompts.video || "";
+      const promptZh = isVideoPrompt ? (prompts.video || prompts.chinese || "") : (prompts.chinese || "");
+      const promptEn = prompts.english || "";
       const platforms = prompts.platforms || { universal: { label: "通用", zh: promptZh, en: promptEn } };
       const platformOptions = Object.keys(platforms).map((key) => ({ key, label: platforms[key].label || key }));
       const platform = platformOptions[0]?.key || "universal";
-      this.setData({ job, analysis, facts, isImageExpansion: job.analysis_task === "image_expand_video", promptZh, promptEn, platforms, platformOptions, platform, prompt: platforms[platform]?.zh || promptZh, computeCount: user.compute_count ?? user.credits ?? 0, optimizationCost: user.pricing?.optimization || 1 });
+      const initialPrompt = platforms[platform]?.zh || promptZh || "中文提示词暂不可用";
+      this.setData({ job, analysis, facts, isImageExpansion: job.analysis_task === "image_expand_video", promptZh, promptEn, platforms, platformOptions, platform, prompt: initialPrompt, computeCount: user.compute_count ?? user.credits ?? 0, optimizationCost: user.pricing?.optimization || 1 });
       const projects = await api("/api/v1/projects").catch(() => []);
       this.setData({ project: projects.find((item) => item.source_job_id === Number(this.jobId)) || null });
       await this.loadOptimizations();
@@ -42,9 +43,12 @@ Page({
       const id = Number(versionKey.replace("optimization-", ""));
       const item = optimizations.find((entry) => entry.id === id);
       if (item?.result?.[language]) return item.result[language];
+      if (language === "en") return "English prompt is unavailable for this version.";
     }
     const selected = this.data.platforms[platform] || {};
-    return selected[language] || selected.zh || (language === "en" ? this.data.promptEn : this.data.promptZh);
+    if (selected[language]) return selected[language];
+    if (language === "en") return this.data.promptEn || "English prompt is unavailable for this platform.";
+    return selected.zh || this.data.promptZh || "中文提示词暂不可用";
   },
   switchLanguage(event) { const language = event.currentTarget.dataset.language; this.setData({ language, prompt: this.resolvePrompt(this.data.platform, language) }); },
   switchPlatform(event) { const platform = event.currentTarget.dataset.platform; this.setData({ platform, versionKey: "base", versionOptions: this.versionOptions(platform), prompt: this.resolvePrompt(platform, this.data.language, "base") }); },

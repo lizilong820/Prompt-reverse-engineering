@@ -2,6 +2,11 @@ const { api } = require("../../utils/api");
 
 Page({
   data: { records: [] },
+  getStatusClass(status) {
+    if (["succeeded", "completed"].includes(status)) return "success";
+    if (["failed", "expired"].includes(status)) return "failed";
+    return "processing";
+  },
   onShow() { this.load(); },
   onPullDownRefresh() { this.load().finally(() => wx.stopPullDownRefresh()); },
   async load() {
@@ -22,6 +27,7 @@ Page({
           recordType: "analysis",
           title: job.analysis_task === "image_expand_video" ? "画面拓展" : job.mode === "video" ? "视频反推" : "图片反推",
           statusText: analysisLabels[job.status] || job.status,
+          statusClass: this.getStatusClass(job.status),
           createdText: new Date(job.created_at).toLocaleString()
         })),
         ...depthJobs.map((job) => ({
@@ -30,6 +36,7 @@ Page({
           recordType: "depth",
           title: "视频深度转换 · " + (depthPresetLabels[job.preset] || "标准深度"),
           statusText: depthLabels[job.status] || job.status,
+          statusClass: this.getStatusClass(job.status),
           createdText: new Date(job.created_at).toLocaleString()
         })),
         ...diagnosticJobs.map((job) => ({
@@ -39,6 +46,7 @@ Page({
           title: "视频复刻诊断",
           filename: [job.original_filename, job.generated_filename].filter(Boolean).join(" / ") || "等待上传",
           statusText: analysisLabels[job.status] || (job.status === "awaiting_upload" ? "等待上传" : job.status),
+          statusClass: this.getStatusClass(job.status),
           createdText: new Date(job.created_at).toLocaleString()
         }))
       ].sort((left, right) => new Date(right.created_at) - new Date(left.created_at));

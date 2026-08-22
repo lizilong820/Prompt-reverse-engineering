@@ -212,21 +212,27 @@ def save_analysis(mode: str, filename: str, analysis: VisualAnalysis, prompts: P
 
 
 def make_prompts(analysis: VisualAnalysis, video_prompt: bool = False) -> PromptBundle:
-    details = ", ".join(analysis.details) or "highly resolved natural textures"
-    negative = ", ".join(analysis.negative_prompt) or "text, logo, watermark, artifacts"
-    universal = analysis.prompt_zh or f"{analysis.subject}。{analysis.scene}。{analysis.composition}。{analysis.camera}。{analysis.lighting}。{analysis.color}。{analysis.style}。细节：{details}。"
-    english = analysis.prompt_en or f"{analysis.subject}. {analysis.scene}. {analysis.composition}. {analysis.camera}. {analysis.lighting}. {analysis.color}. {analysis.style}. Details: {details}."
-    midjourney = f"{analysis.subject}, {analysis.scene}, {analysis.composition}, {analysis.camera}, {analysis.lighting}, {analysis.style}, {details} --ar 4:5 --stylize 180 --no {negative}"
-    flux = f"A cinematic editorial image of {analysis.subject}, in {analysis.scene}. {analysis.composition}. {analysis.camera}. {analysis.lighting}. Color palette: {analysis.color}. Style: {analysis.style}. Details: {details}. Avoid {negative}."
-    timeline = " ".join(f"{item.start}-{item.end}: {item.description}; camera: {item.camera_motion}; subject: {item.subject_motion}." for item in analysis.timeline)
-    video = analysis.prompt_zh if video_prompt and analysis.prompt_zh else f"{analysis.subject}. {analysis.scene}. {analysis.composition}. {analysis.camera}. {analysis.lighting}. Preserve identity, wardrobe and spatial continuity. {timeline} 24fps, realistic motion blur, cinematic pacing. Avoid {negative}."
-    video_en = analysis.prompt_en if video_prompt and analysis.prompt_en else f"{analysis.subject}. {analysis.scene}. {analysis.composition}. {analysis.camera}. {analysis.lighting}. Preserve identity, wardrobe and spatial continuity. {timeline} 24fps, realistic motion blur, cinematic pacing. Avoid {negative}."
-    image_jimeng = f"主体：{analysis.subject}\n场景：{analysis.scene}\n构图：{analysis.composition}\n镜头：{analysis.camera}\n光影：{analysis.lighting}\n色彩与风格：{analysis.color}，{analysis.style}\n细节：{details}\n负面约束：{negative}"
-    video_kling = f"生成一段连续视频。主体：{analysis.subject}。场景：{analysis.scene}。首帧构图：{analysis.composition}。镜头：{analysis.camera}。光影：{analysis.lighting}。{timeline} 保持人物身份、服装、空间结构和光线连续，动作自然，运动速度真实，避免闪烁、变形、跳帧和新增内容。"
-    video_jimeng = f"画面主体：{analysis.subject}。环境：{analysis.scene}。起始构图：{analysis.composition}。运镜方式：{analysis.camera}。光影与色彩：{analysis.lighting}，{analysis.color}。动作推进：{timeline} 画面节奏连贯，主体动作清楚，保持外观、服装、场景和光线稳定，结尾自然停稳。"
-    video_hailuo = f"电影感连续镜头，{analysis.subject}，位于{analysis.scene}。开场画面：{analysis.composition}。镜头语言：{analysis.camera}。光线与风格：{analysis.lighting}，{analysis.style}。时间推进：{timeline} 强调真实运动惯性、自然表情和衣物动态，保持人物与背景一致，避免闪烁、肢体畸变和场景漂移。"
-    video_runway = f"A continuous cinematic video of {analysis.subject} in {analysis.scene}. Start with {analysis.composition}. Camera: {analysis.camera}. Lighting: {analysis.lighting}. Maintain identity, wardrobe, spatial continuity and stable geometry. Timeline: {timeline} Natural motion, realistic speed, consistent temporal detail, no cuts, no morphing, no extra subjects."
-    video_veo = f"Create a coherent video shot of {analysis.subject} in {analysis.scene}. Shot composition: {analysis.composition}. Camera direction: {analysis.camera}. Lighting and color: {analysis.lighting}; {analysis.color}. Action progression: {timeline} Preserve physical continuity, identity, wardrobe and background geometry. Use natural motion blur and end in a stable final state."
+    details_zh = ", ".join(analysis.details) or "高解析自然纹理"
+    negative_zh = ", ".join(analysis.negative_prompt) or "文字、标志、水印、画面瑕疵"
+    details_en = ", ".join(analysis.details) or "highly resolved natural textures"
+    negative_en = ", ".join(analysis.negative_prompt) or "text, logo, watermark, artifacts"
+    universal = analysis.prompt_zh or f"{analysis.subject}。{analysis.scene}。{analysis.composition}。{analysis.camera}。{analysis.lighting}。{analysis.color}。{analysis.style}。细节：{details_zh}。"
+    english = analysis.prompt_en or f"{analysis.subject}. {analysis.scene}. {analysis.composition}. {analysis.camera}. {analysis.lighting}. {analysis.color}. {analysis.style}. Details: {details_en}."
+    midjourney_zh = f"{analysis.subject}，{analysis.scene}，{analysis.composition}，{analysis.camera}，{analysis.lighting}，{analysis.style}，{details_zh}。--ar 4:5 --stylize 180 --no {negative_zh}"
+    midjourney_en = f"{english} --ar 4:5 --stylize 180 --no {negative_en}"
+    flux_zh = f"电影感编辑摄影：{analysis.subject}，位于{analysis.scene}。{analysis.composition}。{analysis.camera}。{analysis.lighting}。色彩：{analysis.color}。风格：{analysis.style}。细节：{details_zh}。避免：{negative_zh}。"
+    flux_en = f"A cinematic editorial image of {analysis.subject} in {analysis.scene}. {analysis.composition}. {analysis.camera}. {analysis.lighting}. Color palette: {analysis.color}. Style: {analysis.style}. Details: {details_en}. Avoid {negative_en}."
+    timeline_zh = " ".join(f"{item.start}-{item.end}：{item.description}；镜头：{item.camera_motion}；主体：{item.subject_motion}。" for item in analysis.timeline)
+    timeline_en = " ".join(f"{item.start}-{item.end}: {item.description}; camera: {item.camera_motion}; subject: {item.subject_motion}." for item in analysis.timeline)
+    video = analysis.prompt_zh if video_prompt and analysis.prompt_zh else f"{universal} 保持人物身份、服装、空间结构和光线连续，{timeline_zh} 24fps，真实运动模糊，电影化节奏，避免{negative_zh}。"
+    video_en = analysis.prompt_en if video_prompt and analysis.prompt_en else f"{english} Preserve identity, wardrobe and spatial continuity. {timeline_en} 24fps, realistic motion blur, cinematic pacing. Avoid {negative_en}."
+    image_jimeng = f"主体：{analysis.subject}\n场景：{analysis.scene}\n构图：{analysis.composition}\n镜头：{analysis.camera}\n光影：{analysis.lighting}\n色彩与风格：{analysis.color}，{analysis.style}\n细节：{details_zh}\n负面约束：{negative_zh}"
+    image_jimeng_en = f"Subject: {analysis.subject}\nScene: {analysis.scene}\nComposition: {analysis.composition}\nCamera: {analysis.camera}\nLighting: {analysis.lighting}\nColor and style: {analysis.color}, {analysis.style}\nDetails: {details_en}\nNegative constraints: {negative_en}"
+    video_kling = f"生成一段连续视频。主体：{analysis.subject}。场景：{analysis.scene}。首帧构图：{analysis.composition}。镜头：{analysis.camera}。光影：{analysis.lighting}。{timeline_zh} 保持人物身份、服装、空间结构和光线连续，动作自然，避免闪烁、变形、跳帧和新增内容。"
+    video_jimeng = f"画面主体：{analysis.subject}。环境：{analysis.scene}。起始构图：{analysis.composition}。运镜方式：{analysis.camera}。光影与色彩：{analysis.lighting}，{analysis.color}。动作推进：{timeline_zh} 画面节奏连贯，保持外观、服装、场景和光线稳定。"
+    video_hailuo = f"电影感连续镜头，{analysis.subject}，位于{analysis.scene}。开场画面：{analysis.composition}。镜头语言：{analysis.camera}。光线与风格：{analysis.lighting}，{analysis.style}。时间推进：{timeline_zh} 强调真实运动惯性，保持人物与背景一致，避免闪烁、肢体畸变和场景漂移。"
+    video_runway = f"A continuous cinematic video of {analysis.subject} in {analysis.scene}. Start with {analysis.composition}. Camera: {analysis.camera}. Lighting: {analysis.lighting}. Maintain identity, wardrobe, spatial continuity and stable geometry. Timeline: {timeline_en} Natural motion, realistic speed, consistent temporal detail, no cuts, no morphing, no extra subjects."
+    video_veo = f"Create a coherent video shot of {analysis.subject} in {analysis.scene}. Shot composition: {analysis.composition}. Camera direction: {analysis.camera}. Lighting and color: {analysis.lighting}; {analysis.color}. Action progression: {timeline_en} Preserve physical continuity, identity, wardrobe and background geometry. Use natural motion blur and end in a stable final state."
     if video_prompt:
         platforms = {
             "universal": {"label": "通用", "zh": video, "en": video_en},
@@ -239,9 +245,9 @@ def make_prompts(analysis: VisualAnalysis, video_prompt: bool = False) -> Prompt
     else:
         platforms = {
             "universal": {"label": "通用", "zh": universal, "en": english},
-            "midjourney": {"label": "Midjourney", "zh": midjourney, "en": midjourney},
-            "flux": {"label": "Flux", "zh": flux, "en": flux},
-            "jimeng": {"label": "即梦", "zh": image_jimeng, "en": english},
+            "midjourney": {"label": "Midjourney", "zh": midjourney_zh, "en": midjourney_en},
+            "flux": {"label": "Flux", "zh": flux_zh, "en": flux_en},
+            "jimeng": {"label": "即梦", "zh": image_jimeng, "en": image_jimeng_en},
         }
     return PromptBundle(universal=universal, midjourney=midjourney, flux=flux, video=video, chinese=universal, english=english, platforms=platforms)
 
@@ -371,7 +377,7 @@ async def call_vision(images: list[tuple[bytes, str, str]], analysis_depth: str 
         "subject、scene、composition、camera、lighting、color、style、details、negative_prompt、confidence、timeline、prompt_zh、prompt_en。"
         "前七项是简洁中文字符串；details 和 negative_prompt 是字符串数组；confidence 是 0 到 100 的整数；"
         "timeline 是对象数组，每项必须包含 start、end、description、camera_motion、subject_motion。"
-        "prompt_zh 是可直接用于生成模型的完整中文提示词，prompt_en 是语义一致且自然专业的完整英文提示词，不得简单拼音化。"
+        "prompt_zh 是只使用中文表达的完整提示词；prompt_en 是只使用英文表达的完整提示词。prompt_en 禁止出现任何中文字符、中文标点或中英逐词拼接，必须是自然专业的英文句子；prompt_zh 禁止用英文句子替代中文内容。两者语义一致但语言必须彻底分离。"
         f"{task_guidance}{depth_guidance}即使画面简单也必须填写全部字段。"
     )
     content: list[dict[str, Any]] = [{"type": "text", "text": instructions}]
